@@ -526,15 +526,56 @@ html, body {
    피아노 패널
 ══════════════════════════════════════════════ */
 .panel-piano {
-  background:
-    radial-gradient(ellipse at 25% 55%, rgba(80,35,150,0.55) 0%, transparent 55%),
-    radial-gradient(ellipse at 85% 15%, rgba(110,50,180,0.28) 0%, transparent 48%),
-    radial-gradient(ellipse at 60% 90%, rgba(60,25,120,0.38) 0%, transparent 50%),
-    linear-gradient(150deg, #14091f 0%, #1c1028 45%, #140a22 100%);
+  background: #f4f3f0;
   display: flex; align-items: center; justify-content: center;
   overflow: hidden;
+  position: relative;
   transition: background 0.3s ease;
 }
+/* 종이 질감 grain */
+.panel-piano::before {
+  content: '';
+  position: absolute; inset: 0;
+  z-index: 5; pointer-events: none;
+  opacity: 0.030;
+  background-image:
+    radial-gradient(circle at 18% 22%, #000 0 0.7px, transparent 0.7px),
+    radial-gradient(circle at 63% 41%, #000 0 0.5px, transparent 0.5px),
+    radial-gradient(circle at 38% 68%, #000 0 0.55px, transparent 0.55px),
+    radial-gradient(circle at 82% 55%, #000 0 0.4px, transparent 0.4px),
+    radial-gradient(circle at 50% 10%, #000 0 0.45px, transparent 0.45px);
+  background-size: 155px 155px, 195px 195px, 140px 140px, 175px 175px, 210px 210px;
+}
+/* 페이지 인덱스 */
+.panel-piano::after {
+  content: '02 / 04';
+  position: absolute;
+  top: 30px; right: 34px;
+  font-family: "Cormorant Garamond", serif;
+  font-size: 0.60rem; letter-spacing: 0.30em;
+  color: rgba(0,0,0,0.14);
+  z-index: 8; pointer-events: none;
+}
+
+/* 프레임 라인 다크 */
+.panel-piano .frame-line {
+  background: linear-gradient(90deg, transparent, rgba(0,0,0,0.07), transparent) !important;
+  box-shadow: none !important;
+}
+.panel-piano .frame-left,
+.panel-piano .frame-right {
+  background: linear-gradient(180deg, transparent, rgba(0,0,0,0.05), transparent) !important;
+}
+/* 펄스링 숨김 */
+.panel-piano .piano-pulse-rings { display: none; }
+/* back 힌트 다크 */
+.panel-piano .back-hint { opacity: 0.42; }
+.panel-piano .back-hint:hover { opacity: 0.80; }
+.panel-piano .back-hint .back-arrow { color: rgba(70,48,25,0.60); }
+.panel-piano .back-hint .back-text  { color: rgba(70,48,25,0.42); }
+/* down 힌트 웜톤 */
+.panel-piano .down-hint .down-arrow { color: rgba(70,48,25,0.45); }
+.panel-piano .down-hint .down-text  { color: rgba(70,48,25,0.32); }
 .piano-inner {
   display: grid;
   grid-template-columns: 1.1fr 0.9fr;
@@ -572,14 +613,15 @@ html, body {
     translate3d(calc(var(--mx) * 0.008), calc(var(--my) * 0.008), 0)
     scale(calc(1 + var(--lq-sub) * 0.025 + var(--lq-mid) * 0.012))
     translateY(calc(var(--lq-mid) * -5px + var(--lq-sub) * 2px));
-  mix-blend-mode: normal;
+  mix-blend-mode: multiply;
   filter:
-    brightness(calc(1.14 + var(--lq-shimmer) * 0.14))
-    contrast(calc(1.08 + var(--lq-mid) * 0.06))
-    saturate(0.82)
-    drop-shadow(0 30px 70px rgba(60,10,140,0.65))
-    drop-shadow(0 0 calc(28px + var(--lq-sub) * 52px) rgba(120,60,220,calc(0.26 + var(--lq-sub) * 0.24)))
-    drop-shadow(0 0 calc(12px + var(--lq-shimmer) * 28px) rgba(180,140,255,calc(var(--lq-shimmer) * 0.18)));
+    brightness(calc(0.90 + var(--lq-shimmer) * 0.05))
+    contrast(calc(1.18 + var(--lq-mid) * 0.07))
+    saturate(calc(0.32 + var(--lq-mid) * 0.08))
+    sepia(0.12)
+    drop-shadow(0 48px 90px rgba(30,18,8,0.20))
+    drop-shadow(0 12px 32px rgba(20,12,4,calc(0.13 + var(--lq-sub) * 0.09)))
+    drop-shadow(3px 3px 0px rgba(20,12,4,0.04));
   transition: transform 0.04s, filter 0.04s;
 }
 
@@ -588,6 +630,20 @@ html, body {
   position: relative; z-index: 7;
   text-align: left;
   padding-right: 6vw;
+  padding-left: 22px;
+}
+/* 텍스트 블록 왼쪽 accent 라인 */
+.piano-text::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 1px;
+  background: linear-gradient(180deg,
+    transparent 0%,
+    rgba(110,78,42,0.22) 18%,
+    rgba(110,78,42,0.22) 82%,
+    transparent 100%
+  );
 }
 .piano-title-block {
   display: flex;
@@ -602,7 +658,7 @@ html, body {
   font-weight: 400;
   font-size: clamp(0.7rem, 1.2vw, 0.95rem);
   letter-spacing: 0.80em;
-  color: rgba(200,170,255,0.68);
+  color: rgba(118,85,48,0.65);
   text-transform: uppercase;
   display: block;
   margin-bottom: 8px;
@@ -614,11 +670,10 @@ html, body {
   font-size: clamp(3.0rem, 6.0vw, 6.2rem);
   line-height: 0.88;
   letter-spacing: -0.02em;
-  color: rgba(225,210,255,0.96);
+  color: rgba(14,10,6,0.92);
   text-shadow:
-    0 0 90px rgba(120,60,220,0.62),
-    0 0 calc(10px + var(--lq-mid) * 36px) rgba(150,90,255,calc(0.20 + var(--lq-mid) * 0.28)),
-    0 0 calc(3px + var(--lq-shimmer) * 22px) rgba(200,160,255,calc(var(--lq-shimmer) * 0.68));
+    0 1px 3px rgba(30,18,8,0.08),
+    0 0 calc(var(--lq-sub) * 20px) rgba(100,65,25,calc(var(--lq-sub) * 0.12));
   transform:
     translateY(calc(var(--lq-mid) * -5px + var(--lq-sub) * 2px))
     scale(calc(1 + var(--lq-sub) * 0.012));
@@ -629,28 +684,42 @@ html, body {
 .piano-title::after {
   content: '';
   display: block;
-  width: 32px;
+  width: 44px;
   height: 1px;
-  background: linear-gradient(90deg, rgba(180,130,255,0.65), transparent);
-  margin: 18px 0 0;
+  background: linear-gradient(90deg, rgba(110,78,42,0.40), rgba(110,78,42,0.08) 70%, transparent);
+  margin: 20px 0 0;
 }
 .piano-title-name {
   font-family: "Cormorant Garamond", serif;
   font-weight: 400;
   font-size: clamp(1.1rem, 2.0vw, 1.8rem);
   letter-spacing: 0.35em;
-  color: rgba(195,170,255,0.75);
+  color: rgba(100,72,40,0.58);
   display: block;
   margin-top: 14px;
 }
 .piano-sub {
   margin: 22px 0 0;
-  color: rgba(200,180,240,0.62);
+  color: rgba(45,32,18,0.52);
   line-height: 2.2; font-size: 0.82rem; font-weight: 300;
   letter-spacing: 0.06em;
 }
 .piano-tags { margin-top: 28px; display: flex; flex-wrap: wrap; gap: 18px; justify-content: flex-start; }
-.panel-piano .eyebrow { color: rgba(190,155,255,0.62); letter-spacing: 0.38em; font-size: 0.62rem; }
+.panel-piano .eyebrow {
+  color: rgba(95,68,38,0.55);
+  letter-spacing: 0.38em;
+  font-size: 0.62rem;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.panel-piano .eyebrow::before {
+  content: '';
+  display: inline-block;
+  width: 18px; height: 1px;
+  background: rgba(118,85,48,0.38);
+  flex-shrink: 0;
+}
 .back-hint {
   position: absolute; left: 24px; bottom: 28px;
   z-index: 8; display: flex; align-items: center; gap: 8px;
@@ -688,18 +757,23 @@ html, body {
 /* 피아노 패널 전용 chip */
 .piano-chip {
   border: none !important;
-  border-bottom: 1px solid rgba(150,100,255,0.18) !important;
+  border-bottom: 1px solid rgba(110,78,42,0.22) !important;
   border-radius: 0 !important;
   background: transparent !important;
   backdrop-filter: none !important;
   box-shadow: none !important;
-  color: rgba(160,130,255,0.72) !important;
-  font-size: 0.65rem !important;
-  letter-spacing: 0.28em !important;
-  padding: 3px 1px 5px !important;
+  color: rgba(85,60,32,0.62) !important;
+  font-size: 0.64rem !important;
+  letter-spacing: 0.30em !important;
+  padding: 4px 0px 6px !important;
   font-family: "Cormorant Garamond", serif !important;
   font-weight: 400 !important;
   text-transform: uppercase;
+  transition: color 0.18s, border-color 0.18s !important;
+}
+.piano-chip:hover {
+  color: rgba(80,52,18,0.95) !important;
+  border-bottom-color: rgba(110,78,42,0.55) !important;
 }
 
 
@@ -1154,9 +1228,12 @@ html, body {
   .piano-inner { grid-template-columns: 1fr; }
   .piano-visual { justify-content: center; padding-left: 0; }
   .piano-text { text-align: center; padding-right: 0; padding: 0 5vw; }
+  .piano-text::before { display: none; }
+  .panel-piano .eyebrow { justify-content: center; }
+  .panel-piano .eyebrow::before { display: none; }
   .piano-title-block { align-items: center; }
   .piano-tags { justify-content: center; }
-  .piano-title::after { margin: 18px auto 0; }
+  .piano-title::after { margin: 20px auto 0; }
   .piano-png { width:min(80vw,500px); max-height: 40vh; }
 }
 @media (max-width: 640px) {
@@ -1234,7 +1311,7 @@ html, body {
    청록-파랑-보라-붉은 저음부 색감 재해석
 ══════════════════════════════════════════════ */
 .panel-scene {
-  background: #04060e;
+  background: #07070a;
   overflow: hidden;
   position: relative;
   transition: background 0.15s ease-out;
@@ -1249,23 +1326,25 @@ html, body {
   will-change: background;
 }
 
-/* 별빛 입자 레이어 — 청록 빛 점들 (CSS로 재현) */
+/* 별빛 입자 레이어 — 실버/화이트 점들 */
 .scene-depth-layer {
   position: absolute; inset: -6%;
   z-index: 1; pointer-events: none;
   background:
-    radial-gradient(circle 2px at 22% 18%, rgba(0,210,220,0.45) 0%, transparent 100%),
-    radial-gradient(circle 1px at 38% 8%,  rgba(150,220,255,0.35) 0%, transparent 100%),
-    radial-gradient(circle 3px at 68% 12%, rgba(0,200,230,0.60) 0%, transparent 100%),
-    radial-gradient(circle 1px at 82% 22%, rgba(180,230,255,0.30) 0%, transparent 100%),
-    radial-gradient(circle 1px at 12% 32%, rgba(100,200,240,0.28) 0%, transparent 100%),
-    radial-gradient(circle 2px at 55% 6%,  rgba(0,180,210,0.40) 0%, transparent 100%),
-    radial-gradient(circle 1px at 44% 28%, rgba(140,210,255,0.22) 0%, transparent 100%),
-    radial-gradient(circle 1px at 90% 40%, rgba(100,190,230,0.25) 0%, transparent 100%),
-    radial-gradient(ellipse 200% 40% at 68% 68%,
-      rgba(0,110,140,0.14) 0%, transparent 55%),
-    radial-gradient(ellipse 60% 30% at 30% 78%,
-      rgba(180,50,10,0.18) 0%, transparent 60%);
+    radial-gradient(circle 1.5px at 22% 18%, rgba(255,255,255,0.55) 0%, transparent 100%),
+    radial-gradient(circle 1px   at 38% 8%,  rgba(255,255,255,0.38) 0%, transparent 100%),
+    radial-gradient(circle 2px   at 68% 12%, rgba(255,255,255,0.62) 0%, transparent 100%),
+    radial-gradient(circle 1px   at 82% 22%, rgba(255,255,255,0.32) 0%, transparent 100%),
+    radial-gradient(circle 1px   at 12% 32%, rgba(255,255,255,0.28) 0%, transparent 100%),
+    radial-gradient(circle 1.5px at 55% 6%,  rgba(255,255,255,0.44) 0%, transparent 100%),
+    radial-gradient(circle 1px   at 44% 28%, rgba(255,255,255,0.20) 0%, transparent 100%),
+    radial-gradient(circle 1px   at 90% 40%, rgba(255,255,255,0.26) 0%, transparent 100%),
+    radial-gradient(circle 1px   at 74% 36%, rgba(255,255,255,0.18) 0%, transparent 100%),
+    radial-gradient(circle 1px   at 31% 52%, rgba(255,255,255,0.16) 0%, transparent 100%),
+    radial-gradient(ellipse 180% 35% at 65% 72%,
+      rgba(30,20,15,0.22) 0%, transparent 55%),
+    radial-gradient(ellipse 55% 28% at 28% 82%,
+      rgba(20,15,10,0.18) 0%, transparent 60%);
   mix-blend-mode: screen;
   transition: transform 0.06s ease-out, filter 0.8s ease-out;
   will-change: transform, filter;
@@ -1332,14 +1411,15 @@ html, body {
 }
 .scene-chip {
   display: inline-block;
-  border: 1px solid rgba(255,255,255,calc(0.10 + var(--lq-air) * 0.28));
-  background: rgba(0,0,0,0.28);
+  border: 1px solid rgba(255,255,255,calc(0.13 + var(--lq-air) * 0.24));
+  background: rgba(255,255,255,0.04);
   padding: 8px 14px; border-radius: 999px;
-  color: rgba(255,255,255,0.72); font-size: 0.76rem;
+  color: rgba(255,255,255,0.65); font-size: 0.76rem;
   letter-spacing: 0.14em;
   backdrop-filter: blur(12px);
-  box-shadow: 0 0 calc(3px + var(--lq-air) * 18px)
-    rgba(var(--palette-r),var(--palette-g),var(--palette-b),calc(0.06 + var(--lq-air) * 0.14));
+  box-shadow:
+    0 0 calc(2px + var(--lq-air) * 12px) rgba(255,255,255,calc(0.03 + var(--lq-air) * 0.08)),
+    inset 0 1px 0 rgba(255,255,255,0.06);
   transition: border-color 0.04s, box-shadow 0.04s;
 }
 

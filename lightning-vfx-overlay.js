@@ -244,11 +244,11 @@ class LightningVFXOverlay {
       // Bolt path (startY is always screen top + 80px, not relative to click)
       topXJitter: 55,
       roughMin: 0.40, roughMax: 0.60,
-      mainDepth: m ? 5 : 6,
-      altDepth:  m ? 3 : 4,
+      mainDepth: m ? 5 : 7,
+      altDepth:  m ? 3 : 5,
       altRoughMult: 0.85,
       // Branches
-      branchMin: 1, branchMax: m ? 2 : 3,
+      branchMin: 1, branchMax: m ? 2 : 4,
       branchFFMin: 0.12, branchFFMax: 0.67,
       branchLenMin: 0.22, branchLenMax: 0.54,
       branchDropMin: 0.55, branchDropMax: 0.90,
@@ -259,9 +259,9 @@ class LightningVFXOverlay {
       mainThickMult: 1.5, mainAlphaMult: 1.0,
       altThickMult:  0.55, altAlphaMult: 0.75,
       layers: [
-        { color: '#4764e1', thick: m ? 16 : 26, alpha: 0.18 },
-        { color: '#1072bd', thick: m ?  6 : 10, alpha: 0.55 },
-        { color: '#aceeff', thick: m ?  2 :  3, alpha: 1.0  },
+        { color: '#4764e1', thick: m ? 16 : 30, alpha: 0.20 },
+        { color: '#1072bd', thick: m ?  6 : 11, alpha: 0.60 },
+        { color: '#d8f4ff', thick: m ?  2 :  3, alpha: 1.0  },
       ],
       // Sparks
       sparkMin: m ? 12 : 28, sparkMax: m ? 22 : 42,
@@ -316,8 +316,15 @@ class LightningVFXOverlay {
 
   // ── Event handlers ────────────────────────────────────────────────────────
 
+  _isNightHour() {
+    const h = new Date().getHours();
+    return h >= 0 && h < 3;
+  }
+
   _onDown(e) {
+    if (!this._isNightHour()) return;
     if (isBlockedTarget(e.target)) return;
+    if (document.body.dataset.hIdx === '1') return;
     const { x, y } = this._s2w(e.clientX, e.clientY);
     this._spawnAt(x, y, performance.now() / 1000);
   }

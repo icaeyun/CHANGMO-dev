@@ -498,24 +498,13 @@ function updatePanelBackgrounds() {
   const e = S.energy;
   const pr = curPal.r/255, pg = curPal.g/255, pb = curPal.b/255;
 
-  // PIANO 패널 — 밝은 배경 + 음악 반응 색조
+  // PIANO 패널 — 흰색 고정 배경 (음악 반응: 미세한 그레이 명도 변화만)
   const pianoEl = document.getElementById("panel-piano");
   if(pianoEl) {
-    // 에너지에 따른 은은한 색조 변화 (보라 → 팔레트 색)
-    const baseLum = 0.18 + e * 0.06 + LQ.midDensity * 0.04;
-    const baseSat = 0.28 + LQ.highShimmer * 0.12;
-    const palInfluence = 0.12 + e * 0.10;
-    const bgR = Math.floor((32 + pr * 40 * palInfluence + LQ.subPressure * 18) * (1 + baseLum));
-    const bgG = Math.floor((18 + pg * 30 * palInfluence + LQ.midDensity * 12) * (1 + baseLum));
-    const bgB = Math.floor((48 + pb * 55 * palInfluence + LQ.highShimmer * 22) * (1 + baseLum));
-    // 하이라이트 glow
-    const glowA = (0.12 + LQ.midDensity * 0.20 + LQ.highShimmer * 0.14 + S.beat * 0.08).toFixed(3);
-    const glowA2 = (0.08 + LQ.airGlow * 0.16 + LQ.subPressure * 0.10).toFixed(3);
+    const pulse = (LQ.subPressure * 0.018 + LQ.midDensity * 0.012).toFixed(4);
     pianoEl.style.background = `
-      radial-gradient(ellipse at 25% 55%, rgba(${Math.min(255,bgR+60)},${Math.min(255,bgG+20)},${Math.min(255,bgB+40)},${glowA}) 0%, transparent 55%),
-      radial-gradient(ellipse at 85% 15%, rgba(${Math.min(255,bgR+40)},${Math.min(255,bgG+30)},${Math.min(255,bgB+60)},${glowA2}) 0%, transparent 48%),
-      radial-gradient(ellipse at 60% 90%, rgba(${Math.min(255,bgR+20)},${Math.min(255,bgG+10)},${Math.min(255,bgB+30)},0.35) 0%, transparent 50%),
-      linear-gradient(150deg, rgb(${Math.max(4,bgR-20)},${Math.max(2,bgG-14)},${Math.max(8,bgB-10)}) 0%, rgb(${Math.max(6,bgR-8)},${Math.max(4,bgG-6)},${Math.max(12,bgB)}) 45%, rgb(${Math.max(4,bgR-16)},${Math.max(2,bgG-10)},${Math.max(10,bgB-4)}) 100%)
+      radial-gradient(ellipse at 28% 58%, rgba(0,0,0,${(parseFloat(pulse) * 0.5).toFixed(4)}) 0%, transparent 52%),
+      #f5f4f1
     `;
   }
 
@@ -981,6 +970,7 @@ function goTo(hIdx,vIdx){
   if(vIdx>0)   hIdx=0;
   LS.hIdx=hIdx; LS.vIdx=vIdx;
   LS.hOff=hIdx*window.innerWidth; LS.vOff=vIdx*window.innerHeight;
+  document.body.dataset.hIdx = hIdx;
   animateLayout(); updateActiveGLB(vIdx);
 
   const hint=document.getElementById("scroll-hint");
@@ -995,6 +985,16 @@ function goTo(hIdx,vIdx){
   if(hIdx===2){ startSceneRenderer(); initAlbumPanel(); }
   poolActive = (hIdx===3);
   if(hIdx===3){ startPoolRenderer(); }
+
+  // 브랜드 색상 — 피아노 패널(hIdx 1)일 때 빨간색
+  const brand = document.querySelector(".brand");
+  if(brand){
+    brand.style.color = hIdx===1 ? "rgba(185,28,28,0.92)" : "";
+    brand.style.textShadow = hIdx===1
+      ? "0 0 18px rgba(185,28,28,0.22)"
+      : "";
+    brand.style.transition = "color 0.5s ease, text-shadow 0.5s ease";
+  }
 }
 
 function animateLayout(){
