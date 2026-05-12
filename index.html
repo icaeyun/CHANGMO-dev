@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>니가 좋아하던 BAPE..</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;700;900&family=Cormorant+Garamond:wght@500;600;700&display=swap" rel="stylesheet">
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.163.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.163.0/examples/jsm/"
+    }
+  }
+  </script>
+
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <canvas id="glcanvas"></canvas>
+  <canvas id="overlay-canvas"></canvas>
+  <!-- LIGHTNING VFX START -->
+  <canvas id="lightning-vfx-canvas"></canvas>
+  <div id="lightning-flash-overlay"></div>
+  <!-- LIGHTNING VFX END -->
+  <div class="grain"></div>
+  <div class="vignette"></div>
+
+  <header class="topbar">
+    <div class="brand">CHANGMO</div>
+    <div class="controls">
+      <button class="track-btn" data-src="https://xrlcazxrrwszjnqordaq.supabase.co/storage/v1/object/public/music/eraser.m4a" title="Track 1">
+        <span class="track-num">I</span>
+        <span class="track-play-icon">▶</span>
+      </button>
+      <button class="track-btn" data-src="https://xrlcazxrrwszjnqordaq.supabase.co/storage/v1/object/public/music/my.mp4" title="Track 2">
+        <span class="track-num">II</span>
+        <span class="track-play-icon">▶</span>
+      </button>
+      <button class="track-btn" data-src="https://xrlcazxrrwszjnqordaq.supabase.co/storage/v1/object/public/music/ifihadtime.mp4" title="Track 3">
+        <span class="track-num">III</span>
+        <span class="track-play-icon">▶</span>
+      </button>
+      <div class="controls-divider"></div>
+      <label class="file-btn">곡 선택<input type="file" id="audio-file" accept="audio/*" /></label>
+      <button id="play-btn" class="control-btn">재생</button>
+      <button id="pause-btn" class="control-btn">정지</button>
+      <button id="mic-btn" class="control-btn mic-toggle">마이크</button>
+    </div>
+  </header>
+
+  <div class="mic-badge" id="mic-badge">
+    <span class="mic-dot"></span>MIC
+  </div>
+
+  <div class="progress-bar-wrap" id="progress-bar-wrap">
+    <div class="progress-bar-inner" id="progress-bar-inner"></div>
+  </div>
+
+  <div id="swipe-hint" aria-hidden="true">
+    <div class="swipe-hint-inner">
+      <span class="swipe-hint-arrows">
+        <span class="sha sha1">›</span>
+        <span class="sha sha2">›</span>
+        <span class="sha sha3">›</span>
+      </span>
+      <span class="swipe-hint-label">piano</span>
+    </div>
+  </div>
+
+  <div id="main-container">
+    <div id="h-row">
+
+      <!-- PANEL HERO -->
+      <section class="panel panel-hero" id="panel-hero">
+        <div class="frame-lines">
+          <span class="frame-line frame-top"></span>
+          <span class="frame-line frame-right"></span>
+          <span class="frame-line frame-bottom"></span>
+          <span class="frame-line frame-left"></span>
+        </div>
+
+        <div class="hero-structure">
+          <span class="structure-line s1"></span>
+          <span class="structure-line s2"></span>
+          <span class="structure-line s3"></span>
+          <span class="structure-line s4"></span>
+          <span class="structure-vertical v1"></span>
+          <span class="structure-vertical v2"></span>
+          <span class="structure-vertical v3"></span>
+        </div>
+
+        <div class="hero-inner">
+          <div class="hero-text">
+            <p class="eyebrow">힙합의 에너지로 예술적 전율을 울리다</p>
+            <h1 class="reactive-title">창모</h1>
+            <p class="hero-sub">날것의 서사가 써내려간<br>가장 완벽한 구조</p>
+            <div class="mini-info">
+              <span class="reactive-chip">곡 선택 후 재생</span>
+              <span class="reactive-chip">볼륨 크게</span>
+            </div>
+          </div>
+
+          <div class="hero-visual">
+            <div class="hero-aura"></div>
+            <div class="hero-light"></div>
+            <div class="pulse-rings">
+              <span class="pulse-ring pr1"></span>
+              <span class="pulse-ring pr2"></span>
+              <span class="pulse-ring pr3"></span>
+              <span class="pulse-ring pr4"></span>
+            </div>
+            <img src="assets/changmo.png" alt="창모" class="hero-png" />
+          </div>
+        </div>
+
+        <div class="band-hud">
+          <div class="band-item" id="hud-sub"><span class="band-label">SUB</span><span class="band-line"><i id="hud-sub-fill"></i></span></div>
+          <div class="band-item" id="hud-bass"><span class="band-label">BASS</span><span class="band-line"><i id="hud-bass-fill"></i></span></div>
+          <div class="band-item" id="hud-mid"><span class="band-label">MID</span><span class="band-line"><i id="hud-mid-fill"></i></span></div>
+          <div class="band-item" id="hud-high"><span class="band-label">HIGH</span><span class="band-line"><i id="hud-high-fill"></i></span></div>
+          <div class="band-item" id="hud-air"><span class="band-label">AIR</span><span class="band-line"><i id="hud-air-fill"></i></span></div>
+        </div>
+
+        <div class="scroll-hint" id="scroll-hint">
+          <span class="scroll-line"></span>
+          <span class="scroll-text">scroll</span>
+        </div>
+      </section>
+
+      <!-- PANEL PIANO -->
+      <section class="panel panel-piano" id="panel-piano">
+        <div class="frame-lines">
+          <span class="frame-line frame-top"></span>
+          <span class="frame-line frame-right"></span>
+          <span class="frame-line frame-bottom"></span>
+          <span class="frame-line frame-left"></span>
+        </div>
+
+        <div class="piano-inner">
+          <div class="piano-visual">
+            <div class="piano-aura"></div>
+            <div class="piano-pulse-rings">
+              <span class="pulse-ring pr1"></span>
+              <span class="pulse-ring pr2"></span>
+              <span class="pulse-ring pr3"></span>
+            </div>
+            <img src="assets/IMG_4429-Photoroom.png" alt="피아노" class="piano-png" />
+          </div>
+
+          <div class="piano-text">
+            <p class="eyebrow">클래식 · 힙합 · 경계의 확장</p>
+            <div class="piano-title-block">
+              <span class="piano-title-the">THE</span>
+              <h2 class="piano-title">EMPEROR</h2>
+              <span class="piano-title-name">창모</span>
+            </div>
+            <p class="piano-sub">덕소의 피아노 소년,<br>광화문의 마에스트로가 되다.</p>
+            <div class="piano-tags">
+              <span class="reactive-chip piano-chip">[ 마에스트로 ]</span>
+              <span class="reactive-chip piano-chip">[ 황제 ]</span>
+              <span class="reactive-chip piano-chip">[ 세종문화회관 ]</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="back-hint">
+          <span class="back-arrow">←</span>
+          <span class="back-text">back</span>
+        </div>
+      </section>
+
+      <!-- PANEL SCENE -->
+      <section class="panel panel-scene" id="panel-scene">
+        <div class="scene-bg" id="scene-bg"></div>
+        <div class="scene-depth-layer" id="scene-depth"></div>
+        <canvas class="scene-canvas" id="scene-canvas"></canvas>
+
+        <div class="frame-lines">
+          <span class="frame-line frame-top"></span>
+          <span class="frame-line frame-right"></span>
+          <span class="frame-line frame-bottom"></span>
+          <span class="frame-line frame-left"></span>
+        </div>
+
+        <div class="scene-inner">
+          <p class="scene-eyebrow">DISCOGRAPHY</p>
+          <h2 class="scene-title">ALBUM<br>ARCHIVE</h2>
+          <p class="scene-sub">속도와 불빛, 야간의 밀도까지.<br>창모의 밤이 앨범으로 남은 방식.</p>
+          <div class="scene-meta">
+            <span class="scene-chip">심연</span>
+            <span class="scene-chip">가속</span>
+            <span class="scene-chip">잔상</span>
+          </div>
+        </div>
+
+        <div class="back-hint scene-back">
+          <span class="back-arrow">←</span>
+          <span class="back-text">back</span>
+        </div>
+      </section>
+
+      <!-- PANEL POOL -->
+      <section class="panel panel-pool" id="panel-pool">
+        <canvas id="pool-canvas" style="position:absolute;inset:0;width:100%;height:100%;z-index:1;display:block;"></canvas>
+        <canvas id="pool-rain-canvas" style="position:absolute;inset:0;width:100%;height:100%;z-index:4;pointer-events:none;display:block;"></canvas>
+
+        <div class="pool-sky-glow sky-glow-1" style="position:absolute;inset:0;pointer-events:none;z-index:2;mix-blend-mode:screen;background:radial-gradient(circle at 50% 50%, rgba(10,40,80,0.12) 0%, rgba(0,0,0,0.0) 70%);opacity:0.5;"></div>
+
+        <div class="back-hint pool-back">
+          <span class="back-arrow">←</span>
+          <span class="back-text">back</span>
+        </div>
+
+      </section>
+    </div><!-- /h-row -->
+
+    <div id="v-sections">
+
+      <section class="chron-section era-early" id="chron-1" data-glb="assets/vintage_metal_ashtray.glb" data-era="early">
+        <div class="chron-frame-lines">
+          <span class="frame-line frame-top"></span>
+          <span class="frame-line frame-bottom"></span>
+        </div>
+        <div class="chron-glb-wrap">
+          <canvas class="glb-canvas" id="glb-canvas-1"></canvas>
+        </div>
+        <div class="chron-text-block era-early-text">
+          <span class="chron-index">01</span>
+          <h3 class="chron-title">생존</h3>
+          <p class="chron-desc">꺼지지 못한 밤의 끝.<br>성공보다 먼저였던 공기.</p>
+          <div class="chron-tags">
+            <span class="reactive-chip">초기</span>
+            <span class="reactive-chip">압력</span>
+          </div>
+        </div>
+        <div class="down-hint chron-down-hint"><span class="down-arrow">↓</span><span class="down-text">down</span></div>
+      </section>
+
+      <section class="chron-section era-early" id="chron-2" data-glb="assets/hoodie.glb" data-era="early">
+        <div class="chron-frame-lines">
+          <span class="frame-line frame-top"></span>
+          <span class="frame-line frame-bottom"></span>
+        </div>
+        <div class="chron-glb-wrap">
+          <canvas class="glb-canvas" id="glb-canvas-2"></canvas>
+        </div>
+        <div class="chron-text-block era-early-text right-align">
+          <span class="chron-index">02</span>
+          <h3 class="chron-title">젊음</h3>
+          <p class="chron-desc">이름보다 기세로<br>버티던 익명의 시간.</p>
+          <div class="chron-tags">
+            <span class="reactive-chip">초기</span>
+            <span class="reactive-chip">기세</span>
+          </div>
+        </div>
+        <div class="down-hint chron-down-hint"><span class="down-arrow">↓</span><span class="down-text">down</span></div>
+      </section>
+
+      <section class="chron-section era-early" id="chron-3" data-glb="assets/kiki.glb" data-era="early">
+        <div class="chron-frame-lines">
+          <span class="frame-line frame-top"></span>
+          <span class="frame-line frame-bottom"></span>
+        </div>
+        <div class="chron-glb-wrap">
+          <canvas class="glb-canvas" id="glb-canvas-3"></canvas>
+        </div>
+        <div class="chron-text-block era-early-text">
+          <span class="chron-index">03</span>
+          <h3 class="chron-title">잔열</h3>
+          <p class="chron-desc">식지 않은 밤이<br>천천히 무드가 되던 시기.</p>
+          <div class="chron-tags">
+            <span class="reactive-chip">초기</span>
+            <span class="reactive-chip">여운</span>
+          </div>
+        </div>
+        <div class="down-hint chron-down-hint"><span class="down-arrow">↓</span><span class="down-text">down</span></div>
+      </section>
+
+      <section class="chron-section era-mid" id="chron-4" data-glb="assets/cuban_link_chain.glb" data-era="mid">
+        <div class="chron-frame-lines">
+          <span class="frame-line frame-top"></span>
+          <span class="frame-line frame-bottom"></span>
+        </div>
+        <div class="chron-glb-wrap">
+          <canvas class="glb-canvas" id="glb-canvas-4"></canvas>
+        </div>
+        <div class="chron-text-block era-mid-text right-align">
+          <span class="chron-index">04</span>
+          <h3 class="chron-title">야망</h3>
+          <p class="chron-desc">안쪽의 확신이<br>처음 형태를 갖던 순간.</p>
+          <div class="chron-tags">
+            <span class="reactive-chip">중기</span>
+            <span class="reactive-chip">금속</span>
+          </div>
+        </div>
+        <div class="down-hint chron-down-hint"><span class="down-arrow">↓</span><span class="down-text">down</span></div>
+      </section>
+
+      <section class="chron-section era-mid" id="chron-5" data-glb="assets/whiskey.glb" data-era="mid">
+        <div class="chron-frame-lines">
+          <span class="frame-line frame-top"></span>
+          <span class="frame-line frame-bottom"></span>
+        </div>
+        <div class="chron-glb-wrap">
+          <canvas class="glb-canvas" id="glb-canvas-5"></canvas>
+        </div>
+        <div class="chron-text-block era-mid-text">
+          <span class="chron-index">05</span>
+          <h3 class="chron-title">밀도</h3>
+          <p class="chron-desc">버틴 시간 위로<br>취향과 결이 생겨났다.</p>
+          <div class="chron-tags">
+            <span class="reactive-chip">중기</span>
+            <span class="reactive-chip">집중</span>
+          </div>
+        </div>
+        <div class="down-hint chron-down-hint"><span class="down-arrow">↓</span><span class="down-text">down</span></div>
+      </section>
+
+      <section class="chron-section era-mid" id="chron-6" data-glb="assets/diamond_bape_buckle.glb" data-era="mid">
+        <div class="chron-frame-lines">
+          <span class="frame-line frame-top"></span>
+          <span class="frame-line frame-bottom"></span>
+        </div>
+        <div class="chron-glb-wrap">
+          <canvas class="glb-canvas" id="glb-canvas-6"></canvas>
+        </div>
+        <div class="chron-text-block era-mid-text right-align">
+          <span class="chron-index">06</span>
+          <h3 class="chron-title">상승</h3>
+          <p class="chron-desc">아쉬움이 집념이 되고<br>집념이 빛이 되던 시기.</p>
+          <div class="chron-tags">
+            <span class="reactive-chip">중기</span>
+            <span class="reactive-chip">광채</span>
+          </div>
+        </div>
+        <div class="down-hint chron-down-hint"><span class="down-arrow">↓</span><span class="down-text">down</span></div>
+      </section>
+
+      <section class="chron-section era-late" id="chron-7" data-glb="assets/stu.glb" data-era="late">
+        <div class="chron-frame-lines">
+          <span class="frame-line frame-top"></span>
+          <span class="frame-line frame-bottom"></span>
+        </div>
+        <div class="chron-glb-wrap">
+          <canvas class="glb-canvas" id="glb-canvas-7"></canvas>
+        </div>
+        <div class="chron-text-block era-late-text">
+          <span class="chron-index">07</span>
+          <h3 class="chron-title">구축</h3>
+          <p class="chron-desc">집착을 쌓아 올려<br>자기 세계를 세운 방.</p>
+          <div class="chron-tags">
+            <span class="reactive-chip">후기</span>
+            <span class="reactive-chip">축적</span>
+          </div>
+        </div>
+        <div class="down-hint chron-down-hint"><span class="down-arrow">↓</span><span class="down-text">down</span></div>
+      </section>
+
+      <section class="chron-section era-late" id="chron-8" data-glb="assets/20201.glb" data-era="late">
+        <div class="chron-frame-lines">
+          <span class="frame-line frame-top"></span>
+          <span class="frame-line frame-bottom"></span>
+        </div>
+        <div class="chron-glb-wrap">
+          <canvas class="glb-canvas" id="glb-canvas-8"></canvas>
+        </div>
+        <div class="chron-text-block era-late-text right-align">
+          <span class="chron-index">08</span>
+          <h3 class="chron-title">장악</h3>
+          <p class="chron-desc">속도와 과시까지<br>자기 서사로 바꾼 도달.</p>
+          <div class="chron-tags">
+            <span class="reactive-chip">후기</span>
+            <span class="reactive-chip">확장</span>
+          </div>
+        </div>
+        <div class="down-hint chron-down-hint"><span class="down-arrow">↓</span><span class="down-text">down</span></div>
+      </section>
+
+      <section class="chron-section era-late" id="chron-9" data-glb="assets/boot.glb" data-era="late">
+        <div class="chron-frame-lines">
+          <span class="frame-line frame-top"></span>
+          <span class="frame-line frame-bottom"></span>
+        </div>
+        <div class="chron-glb-wrap">
+          <canvas class="glb-canvas" id="glb-canvas-9"></canvas>
+        </div>
+        <div class="chron-text-block era-late-text">
+          <span class="chron-index">09</span>
+          <h3 class="chron-title">정점</h3>
+          <p class="chron-desc">모든 것이 수렴한다.<br>규율 속의 비트.</p>
+          <div class="chron-tags">
+            <span class="reactive-chip">후기</span>
+            <span class="reactive-chip">정점</span>
+          </div>
+        </div>
+        <!-- 마지막 섹션: swipe 힌트로 대체 (down 없음) -->
+      </section>
+
+    </div><!-- /v-sections -->
+  </div><!-- /main-container -->
+
+  <!-- ALBUM PANEL — Glossy Magnetic Deck -->
+  <div id="album-panel-overlay" class="album-panel-overlay" style="display:none;">
+    <div id="album-deck-stage" class="album-deck-stage"></div>
+    <div id="album-deck-counter" class="album-deck-counter"></div>
+    <div id="album-detail" class="album-detail">
+      <span class="ad-index"></span>
+      <h3 class="ad-title"></h3>
+      <p class="ad-desc"></p>
+      <div class="ad-tags"></div>
+    </div>
+
+    <!-- back / next — 패널 이동 전용 (덱과 무관) -->
+    <div class="back-hint album-back-hint" id="album-back-btn">
+      <span class="back-arrow">←</span>
+      <span class="back-text">back</span>
+    </div>
+    <div class="next-hint album-next-hint" id="album-next-btn">
+      <span class="next-text">next</span>
+      <span class="next-arrow">→</span>
+    </div>
+
+    <div class="album-drag-hint">
+      <span class="adh-line"></span>
+      <span class="adh-text">scroll · swipe</span>
+      <span class="adh-line"></span>
+    </div>
+  </div>
+
+  <audio id="audio-player" crossorigin="anonymous"></audio>
+  <script src="https://unpkg.com/meyda@5.6.3/dist/web/meyda.min.js"></script>
+  <script type="module" src="main.js"></script>
+  <!-- LIGHTNING VFX START -->
+  <script type="module" src="lightning-vfx-overlay.js"></script>
+  <!-- LIGHTNING VFX END -->
+</body>
+</html>
