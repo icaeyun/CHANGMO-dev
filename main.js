@@ -4694,66 +4694,236 @@ function initPoolRenderer(){
 }
 
 // ════════════════════════════════════════════════════════
-// POOL SKY FRAME — Three.js volumetric sky iframe
+// POOL SKY CANVAS — inline Three.js Preetham sky + clouds
+// (based on reference/threejs-sky-shader/Sky.js)
 // ════════════════════════════════════════════════════════
-let _pSkyFrame = null;
-let _pSkyMxS = 0, _pSkyMyS = 0;
 
-function _pSkyGetFrame(){
-  if(!_pSkyFrame) _pSkyFrame = document.getElementById('pool-sky-frame');
-  return _pSkyFrame;
-}
+const _SKY_VERT = /* glsl */`
+  uniform vec3 sunPosition;
+  uniform float rayleigh;
+  uniform float turbidity;
+  uniform float mieCoefficient;
+  uniform vec3 up;
+
+  varying vec3 vWorldPosition;
+  varying vec3 vSunDirection;
+  varying vec3 vBetaR;
+  varying vec3 vBetaM;
+  varying float vSunE;
+
+  const float e = 2.71828182845904523536028747135266249775724709369995957;
+  const float pi = 3.141592653589793238462643383279502884197169;
+  const vec3 lambda = vec3(680E-9, 550E-9, 450E-9);
+  const vec3 totalRayleigh = vec3(5.804542996261093E-6, 1.3562911419845635E-5, 3.0265902468824876E-5);
+  const float v = 4.0;
+  const vec3 K = vec3(0.686, 0.678, 0.666);
+  const vec3 MieConst = vec3(1.8399918514433978E14, 2.7798023919660528E14, 4.0790479543861094E14);
+  const float cutoffAngle = 1.6110731556870734;
+  const float steepness = 1.5;
+  const float EE = 1000.0;
+
+  float sunIntensity(float zenithAngleCos) {
+    zenithAngleCos = clamp(zenithAngleCos, -1.0, 1.0);
+    return EE * max(0.0, 1.0 - pow(e, -((cutoffAngle - acos(zenithAngleCos)) / steepness)));
+  }
+  vec3 totalMie(float T) {
+    float c = (0.2 * T) * 10E-18;
+    return 0.434 * c * MieConst;
+  }
+
+  void main() {
+    vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+    vWorldPosition = worldPosition.xyz;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    gl_Position.z = gl_Position.w;
+    vSunDirection = normalize(sunPosition);
+    vSunE = sunIntensity(dot(vSunDirection, up));
+    float sunfade = 1.0 - clamp(1.0 - exp((sunPosition.y / 450000.0)), 0.0, 1.0);
+    float rayleighCoefficient = rayleigh - (1.0 * (1.0 - sunfade));
+    vBetaR = totalRayleigh * rayleighCoefficient;
+    vBetaM = totalMie(turbidity) * mieCoefficient;
+  }
+`;
+
+const _SKY_FRAG = /* glsl */`
+  varying vec3 vWorldPosition;
+  varying vec3 vSunDirection;
+  varying vec3 vBetaR;
+  varying vec3 vBetaM;
+  varying float vSunE;
+
+  uniform float mieDirectionalG;
+  uniform vec3 up;
+  uniform float cloudScale;
+  uniform float cloudSpeed;
+  uniform float cloudCoverage;
+  uniform float cloudDensity;
+  uniform float cloudElevation;
+  uniform float showSunDisc;
+  uniform float time;
+
+  float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123); }
+  float noise(vec2 p) {
+    vec2 i = floor(p); vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash(i), hash(i+vec2(1,0)), f.x), mix(hash(i+vec2(0,1)), hash(i+vec2(1,1)), f.x), f.y);
+  }
+  float fbm(vec2 p) {
+    float v = 0.0, a = 0.5;
+    for(int i=0;i<5;i++){ v += a*noise(p); p *= 2.0; a *= 0.5; }
+    return v;
+  }
+
+  const float pi = 3.141592653589793238462643383279502884197169;
+  const float rayleighZenithLength = 8.4E3;
+  const float mieZenithLength = 1.25E3;
+  const float sunAngularDiameterCos = 0.999956676946448443553574619906976478926848692873900859324;
+  const float THREE_OVER_SIXTEENPI = 0.05968310365946075;
+  const float ONE_OVER_FOURPI = 0.07957747154594767;
+
+  float rayleighPhase(float cosTheta) { return THREE_OVER_SIXTEENPI * (1.0 + pow(cosTheta, 2.0)); }
+  float hgPhase(float cosTheta, float g) {
+    float g2 = pow(g, 2.0);
+    return ONE_OVER_FOURPI * ((1.0 - g2) / pow(1.0 - 2.0*g*cosTheta + g2, 1.5));
+  }
+
+  void main() {
+    vec3 direction = normalize(vWorldPosition - cameraPosition);
+    float zenithAngle = acos(max(0.0, dot(up, direction)));
+    float inv = 1.0 / (cos(zenithAngle) + 0.15 * pow(93.885 - ((zenithAngle * 180.0) / pi), -1.253));
+    vec3 Fex = exp(-(vBetaR * rayleighZenithLength * inv + vBetaM * mieZenithLength * inv));
+    float cosTheta = dot(direction, vSunDirection);
+    vec3 betaRTheta = vBetaR * rayleighPhase(cosTheta * 0.5 + 0.5);
+    vec3 betaMTheta = vBetaM * hgPhase(cosTheta, mieDirectionalG);
+    vec3 Lin = pow(vSunE * ((betaRTheta + betaMTheta) / (vBetaR + vBetaM)) * (1.0 - Fex), vec3(1.5));
+    Lin *= mix(vec3(1.0), pow(vSunE * ((betaRTheta + betaMTheta) / (vBetaR + vBetaM)) * Fex, vec3(0.5)), clamp(pow(1.0 - dot(up, vSunDirection), 5.0), 0.0, 1.0));
+    vec3 L0 = vec3(0.1) * Fex;
+    float sundisc = smoothstep(sunAngularDiameterCos, sunAngularDiameterCos + 0.00002, cosTheta) * showSunDisc;
+    L0 += (vSunE * 19000.0 * Fex) * sundisc;
+    vec3 texColor = (Lin + L0) * 0.04 + vec3(0.0, 0.0003, 0.00075);
+
+    if(direction.y > 0.0 && cloudCoverage > 0.0) {
+      float elev = mix(1.0, 0.1, cloudElevation);
+      vec2 cuv = direction.xz / (direction.y * elev) * cloudScale + time * cloudSpeed;
+      float cn = fbm(cuv * 1000.0) + 0.5 * fbm(cuv * 2000.0 + 3.7);
+      cn = cn * 0.5 + 0.5;
+      float cmask = smoothstep(1.0 - cloudCoverage, 1.0 - cloudCoverage + 0.3, cn);
+      cmask *= smoothstep(0.0, 0.1 + 0.2*cloudElevation, direction.y);
+      float si = dot(direction, vSunDirection) * 0.5 + 0.5;
+      float day = max(0.0, vSunDirection.y * 2.0);
+      vec3 cc = mix(vec3(0.3), vec3(1.0), day);
+      cc = mix(cc, Lin * 0.04 + vec3(1.0), si * 0.5) * vSunE * 0.00002;
+      texColor = mix(texColor, cc, cmask * cloudDensity);
+    }
+
+    gl_FragColor = vec4(texColor, 1.0);
+    #include <tonemapping_fragment>
+    #include <colorspace_fragment>
+  }
+`;
+
+let _pSkyRdr = null, _pSkyScene = null, _pSkyCamera = null;
+let _pSkySkyMesh = null, _pSkyActive = false, _pSkyRaf = null;
+let _pSkyTx = 0, _pSkyTy = 0, _pSkyMx = 0, _pSkyMy = 0;
 
 function startPoolSkyCanvas(){
-  const fr = _pSkyGetFrame();
-  if(fr){ fr.style.visibility='visible'; _pSkyPostMsg('resume'); }
-  // relay mouse from parent and water-iframe → sky iframe
-  _pSkyAttachMouse();
+  const canvas = document.getElementById('pool-sky-bg-canvas');
+  if(!canvas) return;
+  if(!_pSkyRdr) _pSkyInit(canvas);
+  _pSkyActive = true;
+  _pSkyResize();
+  window.addEventListener('mousemove', _pSkyOnMouse, {passive:true});
+  _pSkyLoop();
 }
 
 function stopPoolSkyCanvas(){
-  const fr = _pSkyGetFrame();
-  if(fr){ _pSkyPostMsg('pause'); }
+  _pSkyActive = false;
+  window.removeEventListener('mousemove', _pSkyOnMouse);
+  if(_pSkyRaf){ cancelAnimationFrame(_pSkyRaf); _pSkyRaf = null; }
 }
 
-function _pSkyPostMsg(msg){
-  try{
-    const fr = _pSkyGetFrame();
-    if(fr && fr.contentWindow) fr.contentWindow.postMessage(msg,'*');
-  }catch(e){}
+function _pSkyInit(canvas){
+  _pSkyRdr = new THREE.WebGLRenderer({ canvas, antialias:true, alpha:false });
+  _pSkyRdr.toneMapping = THREE.ACESFilmicToneMapping;
+  _pSkyRdr.toneMappingExposure = 0.5;
+  _pSkyRdr.outputColorSpace = THREE.SRGBColorSpace;
+
+  _pSkyScene  = new THREE.Scene();
+  _pSkyCamera = new THREE.PerspectiveCamera(60, 1, 100, 2000000);
+  _pSkyCamera.position.set(0, 100, 0);
+
+  const mat = new THREE.ShaderMaterial({
+    name: 'SkyShader',
+    uniforms: {
+      turbidity:       { value: 3.5 },
+      rayleigh:        { value: 2.0 },
+      mieCoefficient:  { value: 0.005 },
+      mieDirectionalG: { value: 0.8 },
+      sunPosition:     { value: new THREE.Vector3() },
+      up:              { value: new THREE.Vector3(0,1,0) },
+      cloudScale:      { value: 0.00018 },
+      cloudSpeed:      { value: 0.00008 },
+      cloudCoverage:   { value: 0.38 },
+      cloudDensity:    { value: 0.55 },
+      cloudElevation:  { value: 0.45 },
+      showSunDisc:     { value: 1.0 },
+      time:            { value: 0.0 },
+    },
+    vertexShader:   _SKY_VERT,
+    fragmentShader: _SKY_FRAG,
+    side:       THREE.BackSide,
+    depthWrite: false,
+  });
+
+  _pSkySkyMesh = new THREE.Mesh(new THREE.BoxGeometry(1,1,1), mat);
+  _pSkySkyMesh.scale.setScalar(450000);
+  _pSkyScene.add(_pSkySkyMesh);
 }
 
-function _pSkyAttachMouse(){
-  // parent window mouse
-  window.addEventListener('mousemove', _pSkyRelayMouse, {passive:true});
-  // water iframe mouse (same origin)
-  const waterFr = document.querySelector('.pool-reference-frame');
-  if(waterFr){
-    function attach(){
-      try{
-        waterFr.contentWindow.addEventListener('mousemove', e=>{
-          const r = waterFr.getBoundingClientRect();
-          _pSkyRelayMouse2((r.left+e.clientX)/window.innerWidth-0.5,
-                           (r.top +e.clientY)/window.innerHeight-0.5);
-        },{passive:true});
-      }catch(e){}
-    }
-    if(waterFr.contentDocument && waterFr.contentDocument.readyState==='complete') attach();
-    else waterFr.addEventListener('load', attach);
+function _pSkyOnMouse(e){
+  _pSkyTx = (e.clientX / window.innerWidth  - 0.5) * 2;
+  _pSkyTy = (e.clientY / window.innerHeight - 0.5) * 2;
+}
+
+function _pSkyResize(){
+  const canvas = document.getElementById('pool-sky-bg-canvas');
+  if(!canvas || !_pSkyRdr) return;
+  const W = canvas.clientWidth, H = canvas.clientHeight;
+  if(W > 0 && H > 0){
+    _pSkyRdr.setSize(W, H, false);
+    if(_pSkyCamera){ _pSkyCamera.aspect = W/H; _pSkyCamera.updateProjectionMatrix(); }
   }
 }
 
-function _pSkyRelayMouse(e){
-  _pSkyRelayMouse2(e.clientX/window.innerWidth-0.5, e.clientY/window.innerHeight-0.5);
-}
-function _pSkyRelayMouse2(mx, my){
-  try{
-    const fr = _pSkyGetFrame();
-    if(fr && fr.contentWindow) fr.contentWindow.postMessage({mx, my},'*');
-  }catch(e){}
-}
+function _pSkyLoop(){
+  if(!_pSkyActive) return;
+  _pSkyRaf = requestAnimationFrame(_pSkyLoop);
+  const t = performance.now() * 0.001;
 
-function _pSkyResize(){}
+  _pSkyMx += (_pSkyTx - _pSkyMx) * 0.04;
+  _pSkyMy += (_pSkyTy - _pSkyMy) * 0.04;
+
+  // Sun — slow daytime arc (elevation 20–35°)
+  const elev = THREE.MathUtils.degToRad(27 + Math.sin(t * 0.006) * 8);
+  const azim = THREE.MathUtils.degToRad(185);
+  const sun  = _pSkySkyMesh.material.uniforms.sunPosition.value;
+  sun.set(
+    Math.cos(elev) * Math.sin(azim),
+    Math.sin(elev),
+    Math.cos(elev) * Math.cos(azim)
+  );
+  _pSkySkyMesh.material.uniforms.time.value = t;
+
+  // Mouse parallax — gentle camera tilt
+  _pSkyCamera.lookAt(
+    _pSkyMx * 280,
+    100 - _pSkyMy * 70,
+    -1000
+  );
+  _pSkySkyMesh.position.copy(_pSkyCamera.position);
+
+  _pSkyRdr.render(_pSkyScene, _pSkyCamera);
+}
 
 function startPoolRenderer(){
   if(!poolInited) initPoolRenderer();
