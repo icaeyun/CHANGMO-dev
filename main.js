@@ -17,7 +17,7 @@ import { clone as cloneSkeleton } from 'three/addons/utils/SkeletonUtils.js';
 import { EffectComposer }  from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass }      from 'three/addons/postprocessing/RenderPass.js';
 import { ShaderPass }      from 'three/addons/postprocessing/ShaderPass.js';
-
+import { initFluid,
 "use strict";
 
 // ══════════════════════════════════════════════════════
@@ -3261,261 +3261,247 @@ function buildPoolShell(){
     w.position.set(x, floorY + PH * 0.5, 0);
     w.rotation.y = x > 0 ? -Math.PI * 0.5 : Math.PI * 0.5;
     poolScene.add(w);
-    poolWallCaustics.push(w);
-  });
-}
-
-// ── Water Surface — 완전 커스텀 ShaderMaterial (fluid disturbance)
-// 마우스 velocity, sub/bass pressure, beat 모두 반응
-let poolFluidTex = null;    // 유체 시뮬레이션 텍스처 (CPU)
-let poolFluidCanvas = null;
-let poolFluidCtx = null;
-const FLUID_SIZE = 256;     // 시뮬 해상도
-// height field double buffer
-let fluidH0 = new Float32Array(FLUID_SIZE*FLUID_SIZE); // current
-let fluidH1 = new Float32Array(FLUID_SIZE*FLUID_SIZE); // prev
-let fluidV  = new Float32Array(FLUID_SIZE*FLUID_SIZE); // velocity
+    poolWallCaustics.pus// ── Water Surface — GPU Wave Simulation (madebyevan WebGL Water style)
+// GPU ping-pong: R=height, G=velocity, B=normal.x, A=normal.z
+let gpuRtA = null, gpuRtB = null;
+let gpuSimScene = null, gpuSimCamera = null, gpuSimQuad = null;
+let gpuDropMat = null, gpuUpdateMat = null, gpuNormalMat = null;
+let gpuSimInitialized = false;
+const GPU_SIM_SIZE = 256;
 let fluidPrevMouseUX = 0.5, fluidPrevMouseUY = 0.5;
 let fluidMouseVX = 0, fluidMouseVY = 0;
 
-function initFluidSim(){
-  poolFluidCanvas = document.createElement("canvas");
-  poolFluidCanvas.width = FLUID_SIZE;
-  poolFluidCanvas.height = FLUID_SIZE;
-  poolFluidCtx = poolFluidCanvas.getContext("2d");
-  poolFluidTex = new THREE.CanvasTexture(poolFluidCanvas);
-  poolFluidTex.wrapS = THREE.RepeatWrapping;
-  poolFluidTex.wrapT = THREE.RepeatWrapping;
+function initGPUWaterSim() {
+  if (!poolRenderer || gpuSimInitialized) return;
+  const SZ = GPU_SIM_SIZE;
+  const rtParams = {
+    type: THREE.HalfFloatType,
+    format: THREE.RGBAFormat,
+    minFilter: THREE.LinearFilter,
+    magFilter: THREE.LinearFilter,
+    depthBuffer: false,
+    stencilBuffer: false,
+  };
+  gpuRtA = new THREE.WebGLRenderTarget(SZ, SZ, rtParams);
+  gpuRtB = new THREE.WebGLRenderTarget(SZ, SZ, rtParams);
+
+  gpuSimCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
+  gpuSimCamera.position.z = 1;
+  gpuSimScene = new THREE.Scene();
+  gpuSimQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), null);
+  gpuSimScene.add(gpuSimQuad);
+
+  const simVS = `varying vec2 vUv; void main(){ vUv=uv; gl_Position=vec4(position.xy,0.0,1.0); }`;
+  const delta = new THREE.Vector2(1.0 / SZ, 1.0 / SZ);
+
+  gpuDropMat = new THREE.ShaderMaterial({
+    uniforms: {
+      tTexture:  { value: null },
+      uCenter:   { value: new THREE.Vector2(0.5, 0.5) },
+      uRadius:   { value: 0.03 },
+      uStrength: { value: 0.0 },
+    },
+    vertexShader: simVS,
+    fragmentShader: `
+      const float PI = 3.141592653589793;
+      uniform sampler2D tTexture;
+      uniform vec2 uCenter;
+      uniform float uRadius, uStrength;
+      varying vec2 vUv;
+      void main(){
+        vec4 info = texture2D(tTexture, vUv);
+        float drop = max(0.0, 1.0 - length(uCenter - vUv) / uRadius);
+        drop = 0.5 - cos(drop * PI) * 0.5;
+        info.r += drop * uStrength;
+        gl_FragColor = info;
+      }`,
+  });
+
+  gpuUpdateMat = new THREE.ShaderMaterial({
+    uniforms: {
+      tTexture: { value: null },
+      uDelta:   { value: delta },
+    },
+    vertexShader: simVS,
+    fragmentShader: `
+      uniform sampler2D tTexture;
+      uniform vec2 uDelta;
+      varying vec2 vUv;
+      void main(){
+        vec4 info = texture2D(tTexture, vUv);
+        vec2 dx = vec2(uDelta.x, 0.0);
+        vec2 dy = vec2(0.0, uDelta.y);
+        float average = (
+          texture2D(tTexture, vUv - dx).r +
+          texture2D(tTexture, vUv - dy).r +
+          texture2D(tTexture, vUv + dx).r +
+          texture2D(tTexture, vUv + dy).r
+        ) * 0.25;
+        info.g += (average - info.r) * 2.0;
+        info.g *= 0.995;
+        info.r += info.g;
+        gl_FragColor = info;
+      }`,
+  });
+
+  gpuNormalMat = new THREE.ShaderMaterial({
+    uniforms: {
+      tTexture: { value: null },
+      uDelta:   { value: delta },
+    },
+    vertexShader: simVS,
+    fragmentShader: `
+      uniform sampler2D tTexture;
+      uniform vec2 uDelta;
+      varying vec2 vUv;
+      void main(){
+        vec4 info = texture2D(tTexture, vUv);
+        vec3 dx = vec3(uDelta.x, texture2D(tTexture, vec2(vUv.x+uDelta.x, vUv.y)).r - info.r, 0.0);
+        vec3 dy = vec3(0.0, texture2D(tTexture, vec2(vUv.x, vUv.y+uDelta.y)).r - info.r, uDelta.y);
+        info.ba = normalize(cross(dy, dx)).xz;
+        gl_FragColor = info;
+      }`,
+  });
+
+  gpuSimInitialized = true;
+  // Initial drops to prime the simulation
+  for (let i = 0; i < 10; i++) {
+    gpuAddDrop(
+      Math.random() * 0.6 + 0.2, Math.random() * 0.6 + 0.2,
+      0.02 + Math.random() * 0.03,
+      (i & 1) ? 0.015 : -0.015
+    );
+  }
 }
 
-function stepFluidSim(delta){
-  if(!poolFluidCtx) return;
-  const N = FLUID_SIZE;
-  const dt = Math.min(delta, 0.035);
-  const isMic = (mode === MODE_MIC);
-  // wave propagation speed — 마이크: 훨씬 빠른 전파로 파동이 풀 전체로 순식간에 퍼짐
-  const c = isMic ? 0.52 : 0.30;
-  // 마이크 모드: 감쇠를 약간 낮춰서 진동이 더 오래 울리게
-  const baseDamp = isMic ? 0.991 : 0.994;
-  const damp = baseDamp - _poolOnsetStrength * (isMic ? 0.002 : 0.006);
+function gpuAddDrop(x, y, radius, strength) {
+  if (!gpuSimInitialized || !poolRenderer) return;
+  gpuDropMat.uniforms.tTexture.value = gpuRtA.texture;
+  gpuDropMat.uniforms.uCenter.value.set(x, y);
+  gpuDropMat.uniforms.uRadius.value = radius;
+  gpuDropMat.uniforms.uStrength.value = strength;
+  gpuSimQuad.material = gpuDropMat;
+  poolRenderer.setRenderTarget(gpuRtB);
+  poolRenderer.render(gpuSimScene, gpuSimCamera);
+  poolRenderer.setRenderTarget(null);
+  const tmp = gpuRtA; gpuRtA = gpuRtB; gpuRtB = tmp;
+}
 
-  // ── onset 임펄스 — 마이크: 풀 전체에 동시다발적 진동 ──
+function gpuStepSim() {
+  if (!gpuSimInitialized || !poolRenderer) return;
+  gpuUpdateMat.uniforms.tTexture.value = gpuRtA.texture;
+  gpuSimQuad.material = gpuUpdateMat;
+  poolRenderer.setRenderTarget(gpuRtB);
+  poolRenderer.render(gpuSimScene, gpuSimCamera);
+  poolRenderer.setRenderTarget(null);
+  const tmp = gpuRtA; gpuRtA = gpuRtB; gpuRtB = tmp;
+}
+
+function gpuUpdateNormals() {
+  if (!gpuSimInitialized || !poolRenderer) return;
+  gpuNormalMat.uniforms.tTexture.value = gpuRtA.texture;
+  gpuSimQuad.material = gpuNormalMat;
+  poolRenderer.setRenderTarget(gpuRtB);
+  poolRenderer.render(gpuSimScene, gpuSimCamera);
+  poolRenderer.setRenderTarget(null);
+  const tmp = gpuRtA; gpuRtA = gpuRtB; gpuRtB = tmp;
+}
+
+// initFluidSim: backward-compat shim → GPU 초기화로 위임
+function initFluidSim(){ initGPUWaterSim(); }
+
+function stepFluidSim(delta){
+  if(!gpuSimInitialized) return;
+  const isMic = (mode === MODE_MIC);
+
+  // ── onset 임펄스 — GPU 드롭으로 전달 ──
   if (_poolOnsetStrength > 0.04) {
     const str = _poolOnsetStrength;
     const shouldPulse = isMic ? (S.beat > 0.15 || LQ.bassShock > 0.10 || S.energy > 0.2) : true;
     if (shouldPulse) {
-      // 마이크: 8개 스팟으로 풀 전체가 동시에 울림
       const spots = isMic ? [
-        { fx: 0.5,  fy: 0.5  },  // 중앙
-        { fx: 0.2,  fy: 0.2  },  // 좌상
-        { fx: 0.8,  fy: 0.2  },  // 우상
-        { fx: 0.2,  fy: 0.8  },  // 좌하
-        { fx: 0.8,  fy: 0.8  },  // 우하
-        { fx: 0.5,  fy: 0.15 },  // 상단 중앙
-        { fx: 0.5,  fy: 0.85 },  // 하단 중앙
-        { fx: 0.15, fy: 0.5  },  // 좌측 중앙
-      ] : [
-        { fx: 0.5,  fy: 0.5  },
-        { fx: 0.25, fy: 0.35 },
-        { fx: 0.75, fy: 0.65 },
-      ];
-      spots.forEach(sp => {
-        const cx = Math.floor(N * sp.fx);
-        const cy = Math.floor(N * sp.fy);
-        const r  = Math.floor(N * (0.06 + str * (isMic ? 0.18 : 0.10)));
-        const amp = str * (isMic ? 0.72 : 0.38);
-        for (let dy=-r; dy<=r; dy++) for (let dx=-r; dx<=r; dx++) {
-          const d = Math.sqrt(dx*dx+dy*dy);
-          if (d > r) continue;
-          const xi=cx+dx, yi=cy+dy;
-          if (xi<1||xi>=N-1||yi<1||yi>=N-1) continue;
-          fluidH0[yi*N+xi] += amp * (1 - d/r) * (1 - d/r);
-        }
-      });
+        {fx:0.5,fy:0.5},{fx:0.2,fy:0.2},{fx:0.8,fy:0.2},
+        {fx:0.2,fy:0.8},{fx:0.8,fy:0.8},{fx:0.5,fy:0.15},
+        {fx:0.5,fy:0.85},{fx:0.15,fy:0.5},
+      ] : [{fx:0.5,fy:0.5},{fx:0.25,fy:0.35},{fx:0.75,fy:0.65}];
+      const radius = 0.06 + str * (isMic ? 0.14 : 0.09);
+      const amp    = str * (isMic ? 0.055 : 0.030);
+      spots.forEach(sp => gpuAddDrop(sp.fx, sp.fy, radius, amp));
     }
   }
 
-  // bass shock — 마이크: 벽까지 울리는 강력한 저음 타격
+  // bass shock — 넓고 무거운 저음 파동 (large GPU drop)
   const shockThresh = isMic ? 0.05 : 0.18;
   if (LQ.bassShock > shockThresh) {
-    // 마이크: 중앙 + 4면 가장자리에서 동시 충격
     const shockSpots = isMic ? [
-      { fx: 0.5, fy: 0.5 },
-      { fx: 0.08, fy: 0.5 },   // 좌벽
-      { fx: 0.92, fy: 0.5 },   // 우벽
-      { fx: 0.5, fy: 0.08 },   // 상벽
-      { fx: 0.5, fy: 0.92 },   // 하벽
-    ] : [{ fx: 0.5, fy: 0.5 }];
-    shockSpots.forEach(sp => {
-      const cx = Math.floor(N * sp.fx), cy = Math.floor(N * sp.fy);
-      const r = Math.floor(N * (isMic ? 0.20 : 0.14));
-      const shockAmp = isMic ? 0.48 : 0.22;
-      for(let dy=-r;dy<=r;dy++) for(let dx=-r;dx<=r;dx++){
-        const d = Math.sqrt(dx*dx+dy*dy);
-        if(d>r) continue;
-        const xi=cx+dx, yi=cy+dy;
-        if(xi<0||xi>=N||yi<0||yi>=N) continue;
-        fluidH0[yi*N+xi] += LQ.bassShock * shockAmp * (1-d/r) * (1-d/r);
-      }
-    });
+      {fx:0.5,fy:0.5},{fx:0.10,fy:0.5},{fx:0.90,fy:0.5},
+      {fx:0.5,fy:0.10},{fx:0.5,fy:0.90},
+    ] : [{fx:0.5,fy:0.5}];
+    const radius = isMic ? 0.16 : 0.12;
+    const amp    = LQ.bassShock * (isMic ? 0.052 : 0.024);
+    shockSpots.forEach(sp => gpuAddDrop(sp.fx, sp.fy, radius, amp));
   }
 
-  // 마이크 모드: beat에 맞춘 다중 파동 — 풀이 노래를 느끼는 flow
+  // beat: 중간 파동 (mic 모드)
   if (isMic && S.beat > 0.20) {
-    // beat마다 랜덤 위치 6곳에서 동시에 파동
     const beatSpots = [
-      { fx: 0.5, fy: 0.5 },
-      { fx: 0.3, fy: 0.3 },
-      { fx: 0.7, fy: 0.3 },
-      { fx: 0.3, fy: 0.7 },
-      { fx: 0.7, fy: 0.7 },
-      { fx: 0.5, fy: 0.25 },
+      {fx:0.5,fy:0.5},{fx:0.3,fy:0.3},{fx:0.7,fy:0.3},
+      {fx:0.3,fy:0.7},{fx:0.7,fy:0.7},{fx:0.5,fy:0.25},
     ];
-    beatSpots.forEach(sp => {
-      const cx = Math.floor(N * sp.fx), cy = Math.floor(N * sp.fy);
-      const r = Math.floor(N * (0.08 + S.beat * 0.08));
-      const beatAmp = S.beat * 0.45;
-      for(let dy=-r;dy<=r;dy++) for(let dx=-r;dx<=r;dx++){
-        const d = Math.sqrt(dx*dx+dy*dy);
-        if(d>r) continue;
-        const xi=cx+dx, yi=cy+dy;
-        if(xi<1||xi>=N-1||yi<1||yi>=N-1) continue;
-        fluidH0[yi*N+xi] += beatAmp * (1-d/r) * (1-d/r);
-      }
-    });
+    const radius = 0.07 + S.beat * 0.06;
+    const amp    = S.beat * 0.032;
+    beatSpots.forEach(sp => gpuAddDrop(sp.fx, sp.fy, radius, amp));
   }
 
-  // 마이크 모드: mid/high에 반응하는 지속적 수면 흐름 (노래를 느끼는 풀)
-  if (isMic && S.energy > 0.08) {
-    const flowTime = poolTime || 0;
-    const flowStr = S.mid * 0.18 + S.high * 0.12 + S.air * 0.08;
-    for(let y=2;y<N-2;y+=4) for(let x=2;x<N-2;x+=4) {
-      const nx = x/N, ny = y/N;
-      const wave = Math.sin(nx * 12 + flowTime * 3.5) * Math.cos(ny * 10 - flowTime * 2.8);
-      fluidH0[y*N+x] += wave * flowStr * 0.06;
+  // high/air → 잔물결: 작고 빠른 다수 드롭
+  if (S.high > 0.12 || S.air > 0.08) {
+    const n = isMic ? 5 : 3;
+    const shimmerStr = S.high * 0.020 + S.air * 0.014;
+    for (let i = 0; i < n; i++) {
+      gpuAddDrop(
+        Math.random() * 0.8 + 0.1, Math.random() * 0.8 + 0.1,
+        0.012 + Math.random() * 0.018,
+        shimmerStr * (Math.random() < 0.5 ? 1 : -1)
+      );
     }
   }
 
-  // 마우스 dragging — velocity 기반 disturbance
-  // 넓게 퍼지고, 속도에 비례
+  // mid energy: 수면 흐름 (mic 모드)
+  if (isMic && S.mid > 0.10 && Math.random() < 0.28) {
+    gpuAddDrop(
+      Math.random() * 0.8 + 0.1, Math.random() * 0.8 + 0.1,
+      0.025 + Math.random() * 0.03,
+      S.mid * 0.018 * (Math.random() < 0.5 ? 1 : -1)
+    );
+  }
+
+  // 마우스 drag — GPU drop (velocity 기반)
   {
     const mux = poolMouseX, muy = 1.0 - poolMouseY;
     fluidMouseVX = fluidMouseVX * 0.62 + (mux - fluidPrevMouseUX) * 0.38;
     fluidMouseVY = fluidMouseVY * 0.62 + (muy - fluidPrevMouseUY) * 0.38;
     fluidPrevMouseUX = mux; fluidPrevMouseUY = muy;
     const speed = Math.sqrt(fluidMouseVX*fluidMouseVX + fluidMouseVY*fluidMouseVY);
-    if(speed > 0.0002){
-      const cx = Math.floor(mux * N);
-      const cy = Math.floor(muy * N);
-      // 작은 움직임 → 작고 얕은 disturbance, 빠른 움직임 → 넓고 깊음
-      const r = Math.floor(N * (0.04 + speed * 1.8));
-      const amp = Math.min(speed * 45.0, 0.22);
-      const vx = fluidMouseVX * N, vy = fluidMouseVY * N;
-      for(let dy=-r;dy<=r;dy++) for(let dx=-r;dx<=r;dx++){
-        const d = Math.sqrt(dx*dx+dy*dy);
-        if(d>r) continue;
-        const xi=cx+dx, yi=cy+dy;
-        if(xi<1||xi>=N-1||yi<1||yi>=N-1) continue;
-        const falloff = (1 - d/r);
-        const falloff2 = falloff * falloff;
-        // 이동 방향으로 당기는 drag 효과
-        const proj = (dx*vx + dy*vy) / (Math.max(d,1)*Math.max(Math.sqrt(vx*vx+vy*vy),0.001));
-        fluidH0[yi*N+xi] += amp * falloff2 * (0.6 + proj * 0.4);
-        // velocity field에도 적용 — 관성
-        fluidV[yi*N+xi] += amp * falloff2 * 0.15;
-      }
-    }
-    // hover 반응 — 아주 예민하게, 작은 접촉에도 미세한 disturbance
-    else if(speed > 0.00004){
-      const cx = Math.floor(mux * N);
-      const cy = Math.floor(muy * N);
-      const r = Math.floor(N * 0.025);
-      const amp = speed * 8.0;
-      for(let dy=-r;dy<=r;dy++) for(let dx=-r;dx<=r;dx++){
-        const d = Math.sqrt(dx*dx+dy*dy);
-        if(d>r) continue;
-        const xi=cx+dx, yi=cy+dy;
-        if(xi<1||xi>=N-1||yi<1||yi>=N-1) continue;
-        fluidH0[yi*N+xi] += amp * (1-d/r);
-      }
-    }
-    // 정지 상태에서도 hover 위치 주변에 미세 liquid tension
-    else {
-      const cx = Math.floor(mux * N);
-      const cy = Math.floor(muy * N);
-      const r = 4;
-      for(let dy=-r;dy<=r;dy++) for(let dx=-r;dx<=r;dx++){
-        const d = Math.sqrt(dx*dx+dy*dy);
-        if(d>r) continue;
-        const xi=cx+dx, yi=cy+dy;
-        if(xi<1||xi>=N-1||yi<1||yi>=N-1) continue;
-        fluidH0[yi*N+xi] += 0.0003 * (1-d/r);
-      }
+    if (speed > 0.0004) {
+      const radius = Math.min(0.025 + speed * 1.1, 0.14);
+      const amp    = Math.min(speed * 0.75, 0.042);
+      gpuAddDrop(mux, muy, radius, amp);
+    } else if (speed > 0.00003) {
+      gpuAddDrop(mux, muy, 0.016, speed * 0.18);
     }
   }
 
-  // wave equation step
-  const alpha = c * c;
-  const newH = fluidH1; // reuse as output (swap)
-  for(let y=1;y<N-1;y++){
-    for(let x=1;x<N-1;x++){
-      const idx = y*N+x;
-      const lap =
-        fluidH0[(y-1)*N+x] +
-        fluidH0[(y+1)*N+x] +
-        fluidH0[y*N+(x-1)] +
-        fluidH0[y*N+(x+1)] -
-        4.0 * fluidH0[idx];
-      newH[idx] = (2.0*fluidH0[idx] - newH[idx] + alpha*lap) * damp;
-    }
-  }
-  // edges — absorbing boundary (8픽셀 두께로 테두리 완전 고정)
-  const BORDER = 8;
-  for(let i=0;i<N;i++){
-    for(let b=0;b<BORDER;b++){
-      const fade = b / BORDER; // 0=완전고정, 1=자유
-      // 상단/하단 행
-      newH[b*N+i]       *= fade * fade;
-      newH[(N-1-b)*N+i] *= fade * fade;
-      // 좌측/우측 열
-      newH[i*N+b]       *= fade * fade;
-      newH[i*N+(N-1-b)] *= fade * fade;
-    }
-  }
-
-  // swap buffers
-  const tmp = fluidH1;
-  fluidH1 = fluidH0;
-  fluidH0 = newH;
-
-  // 텍스처로 렌더링 — R: height, GB: gradient(normal)
-  const imageData = poolFluidCtx.createImageData(N, N);
-  const data = imageData.data;
-  for(let y=1;y<N-1;y++){
-    for(let x=1;x<N-1;x++){
-      const idx = y*N+x;
-      const h = fluidH0[idx];
-      // gradient → normal
-      const gx = fluidH0[idx+1] - fluidH0[idx-1];
-      const gy = fluidH0[(y+1)*N+x] - fluidH0[(y-1)*N+x];
-      const ii = idx*4;
-      // R = height (128 = 0), GB = normal XY
-      data[ii]   = Math.max(0, Math.min(255, 128 + h * 160));
-      data[ii+1] = Math.max(0, Math.min(255, 128 + gx * 220));
-      data[ii+2] = Math.max(0, Math.min(255, 128 + gy * 220));
-      data[ii+3] = 255;
-    }
-  }
-  poolFluidCtx.putImageData(imageData, 0, 0);
-  if(poolFluidTex) poolFluidTex.needsUpdate = true;
+  // GPU wave propagation — 2 steps + normal update (reference: water.js)
+  gpuStepSim();
+  gpuStepSim();
+  gpuUpdateNormals();
 }
 
 function buildWaterSurface(){
   const PW = POOL_DIMENSIONS.width, PD = POOL_DIMENSIONS.length;
-  initFluidSim();
+  initFluidSim(); // → initGPUWaterSim()
 
-  // 유체 시뮬 + 커스텀 셰이더 기반 수면
-  const waterGeom = new THREE.PlaneGeometry(PW, PD, 128, 200);
+  const waterGeom = new THREE.PlaneGeometry(PW, PD, 160, 240);
 
   const fallbackNormals = makeProceduralWaterNormals(1024);
   poolWaterNormals = fallbackNormals;
@@ -3532,127 +3518,162 @@ function buildWaterSurface(){
     undefined, ()=>{}
   );
 
-  // 커스텀 water shader — 깊고 맑은 pool blue
+  // madebyevan WebGL Water 스타일 — GPU 시뮬 + Fresnel 반사/굴절 + caustics
   const waterMat = new THREE.ShaderMaterial({
     uniforms: {
-      tNormal:      { value: poolWaterNormals },
-      tFluid:       { value: poolFluidTex },
-      uTime:        { value: 0 },
-      uSunDir:      { value: new THREE.Vector3(0.42, 0.95, 0.28).normalize() },
-      uSunColor:    { value: new THREE.Color(0xfff8e8) },
-      uWaterDeep:   { value: new THREE.Color(0x0a3d5c) },
-      uWaterMid:    { value: new THREE.Color(0x1a88cc) },
-      uWaterShallow:{ value: new THREE.Color(0x5ec8f0) },
-      uCameraPos:   { value: new THREE.Vector3() },
-      uDistortion:  { value: 1.2 },
+      tNormal:       { value: poolWaterNormals },
+      tGPUWater:     { value: gpuRtA ? gpuRtA.texture : null },
+      tCaustics:     { value: poolCausticsTex },
+      uTime:         { value: 0 },
+      uSunDir:       { value: new THREE.Vector3(0.42, 0.95, 0.28).normalize() },
+      uSunColor:     { value: new THREE.Color(0xfff8e8) },
+      uWaterDeep:    { value: new THREE.Color(0x0a3d5c) },
+      uWaterMid:     { value: new THREE.Color(0x1a88cc) },
+      uWaterShallow: { value: new THREE.Color(0x5ec8f0) },
+      uCameraPos:    { value: new THREE.Vector3() },
       uFluidStrength:{ value: 0.0 },
-      uSub:         { value: 0 },
-      uMid:         { value: 0 },
-      uHigh:        { value: 0 },
-      uBeat:        { value: 0 },
-      uMouseSpeed:  { value: 0 },
-      uPaletteR:    { value: 0.5 },
-      uPaletteG:    { value: 0.7 },
-      uPaletteB:    { value: 1.0 },
+      uSub:          { value: 0 },
+      uMid:          { value: 0 },
+      uHigh:         { value: 0 },
+      uBeat:         { value: 0 },
+      uMouseSpeed:   { value: 0 },
+      uPaletteR:     { value: 0.5 },
+      uPaletteG:     { value: 0.7 },
+      uPaletteB:     { value: 1.0 },
     },
     vertexShader:`
-      uniform sampler2D tFluid;
+      uniform sampler2D tGPUWater;
       uniform float uTime, uSub, uBeat, uFluidStrength;
       varying vec3 vWorldPos;
       varying vec2 vUv;
       varying float vHeight;
-      varying vec3 vNormal;
+      varying vec4 vSimData;
       void main(){
-        vUv=uv;
-        // fluid height displacement
-        vec4 fld=texture2D(tFluid,uv);
-        float h=(fld.r-0.5)*0.32*uFluidStrength;
-        // large swell from sub
-        float swell=sin(position.x*0.18+uTime*0.5)*0.030*uSub
-                  + cos(position.z*0.14+uTime*0.4)*0.022*uSub;
-        float beatBump=sin(length(position.xz)*0.6-uTime*5.5)*0.025*uBeat;
-
-        // ── 테두리 edge mask: UV 기준 가장자리에서 displacement를 0으로 고정 ──
-        // smoothstep으로 안쪽 8% 범위 안에서만 진동 허용
-        float edgeFadeX = smoothstep(0.0, 0.08, uv.x) * smoothstep(1.0, 0.92, uv.x);
-        float edgeFadeY = smoothstep(0.0, 0.08, uv.y) * smoothstep(1.0, 0.92, uv.y);
-        float edgeMask  = edgeFadeX * edgeFadeY;
-
-        float disp = (h + swell + beatBump) * edgeMask;
-        vec3 pos=position+vec3(0.0, disp, 0.0);
-        vHeight=disp;
-        vWorldPos=(modelMatrix*vec4(pos,1.0)).xyz;
-        // normal from fluid gradient — 마찬가지로 edge mask 적용
-        vec2 gxy=fld.gb*2.0-1.0;
-        vNormal=normalize(normalMatrix*vec3(-gxy.x*uFluidStrength*edgeMask*0.7,1.0,-gxy.y*uFluidStrength*edgeMask*0.7));
-        gl_Position=projectionMatrix*modelViewMatrix*vec4(pos,1.0);
+        vUv = uv;
+        // GPU fluid: R=height (direct float), BA=normal XZ
+        vec4 sim = texture2D(tGPUWater, uv);
+        vSimData = sim;
+        float h = sim.r * 0.44 * uFluidStrength;
+        // 저음 너울
+        float swell = sin(position.x*0.18+uTime*0.5)*0.028*uSub
+                    + cos(position.z*0.14+uTime*0.4)*0.020*uSub;
+        float beatBump = sin(length(position.xz)*0.6-uTime*5.5)*0.020*uBeat;
+        // edge clamp (가장자리 고정)
+        float ex = smoothstep(0.0,0.07,uv.x)*smoothstep(1.0,0.93,uv.x);
+        float ey = smoothstep(0.0,0.07,uv.y)*smoothstep(1.0,0.93,uv.y);
+        float em = ex * ey;
+        float disp = (h + swell + beatBump) * em;
+        vec3 pos = position + vec3(0.0, disp, 0.0);
+        vHeight = disp;
+        vWorldPos = (modelMatrix * vec4(pos, 1.0)).xyz;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
       }
     `,
     fragmentShader:`
       precision highp float;
       uniform sampler2D tNormal;
-      uniform float uTime,uSub,uMid,uHigh,uBeat,uMouseSpeed;
+      uniform sampler2D tGPUWater;
+      uniform sampler2D tCaustics;
+      uniform float uTime,uSub,uMid,uHigh,uBeat,uMouseSpeed,uFluidStrength;
       uniform float uPaletteR,uPaletteG,uPaletteB;
-      uniform vec3 uSunDir,uSunColor,uWaterDeep,uWaterMid,uWaterShallow;
-      uniform vec3 uCameraPos;
-      uniform float uDistortion;
-      varying vec3 vWorldPos,vNormal;
+      uniform vec3 uSunDir,uSunColor,uWaterDeep,uWaterMid,uWaterShallow,uCameraPos;
+      varying vec3 vWorldPos;
       varying vec2 vUv;
       varying float vHeight;
+      varying vec4 vSimData;
 
       float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
-      float noise(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);
-        return mix(mix(hash(i),hash(i+vec2(1,0)),f.x),mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),f.x),f.y);}
+      float noise(vec2 p){
+        vec2 i=floor(p),f=fract(p);f=f*f*(3.0-2.0*f);
+        return mix(mix(hash(i),hash(i+vec2(1,0)),f.x),mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),f.x),f.y);
+      }
 
       void main(){
-        // 2-layer normal map — 큰 흐름 + 잔결
-        vec2 uv1=vUv*1.8+vec2(uTime*0.022, uTime*0.016);
-        vec2 uv2=vUv*4.5+vec2(-uTime*0.038,uTime*0.028);
-        vec3 n1=texture2D(tNormal,uv1).rgb*2.0-1.0;
-        vec3 n2=texture2D(tNormal,uv2).rgb*2.0-1.0;
-        vec3 nMap=normalize(mix(n1,n2,0.42)+vNormal*0.5);
-        // 물 색상 — 깊이감 표현
-        vec3 viewDir=normalize(uCameraPos-vWorldPos);
-        float fresnel=pow(1.0-max(dot(viewDir,nMap),0.0),3.5);
-        fresnel=mix(0.04,1.0,fresnel);
-        // 깊이에 따른 색상
-        float depth=clamp(-vHeight*3.0+0.5,0.0,1.0);
-        vec3 waterCol=mix(uWaterShallow,uWaterMid,depth);
-        waterCol=mix(waterCol,uWaterDeep,depth*depth);
-        // 팔레트 색상 미세 반영
-        vec3 palColor=vec3(uPaletteR,uPaletteG,uPaletteB);
-        waterCol=mix(waterCol,waterCol*palColor*1.15,0.08);
-        // 태양 반사 specular — 자연스러운 하이라이트
-        vec3 halfV=normalize(uSunDir+viewDir);
-        float spec=pow(max(dot(nMap,halfV),0.0),280.0);
-        float specB=pow(max(dot(nMap,halfV),0.0),40.0)*0.12;
-        // 음악 반응 shimmer
-        float shimmer=uHigh*0.65+uMouseSpeed*0.35;
-        spec=spec*(2.2+shimmer*1.6);
-        // 물 표면 산란 — SSS 느낌
-        float scatter=max(dot(nMap,uSunDir),0.0)*0.55;
-        scatter*=1.0+uMid*0.8;
-        // 잔물결 caustics 반짝임
-        float caus=noise(vUv*8.0+vec2(uTime*0.3))*noise(vUv*14.0-vec2(uTime*0.22));
-        caus=smoothstep(0.50,0.82,caus)*(0.09+shimmer*0.16+uBeat*0.12);
-        // 최종 색상 합성
-        vec3 reflectColor=mix(uSunColor*0.85,vec3(0.75,0.90,1.0),0.5);
-        vec3 col=waterCol*(0.48+scatter*0.75);
-        col=mix(col,reflectColor,fresnel*0.50);
-        col+=uSunColor*spec*(1.1+uHigh*0.5);
-        col+=uSunColor*specB;
-        col+=vec3(0.7,0.9,1.0)*caus;
-        float edgeGlow=vHeight*1.0+0.14*uBeat;
-        col+=vec3(0.6,0.9,1.0)*max(0.0,edgeGlow)*0.09;
-        col+=vec3(0.85,0.97,1.0)*uBeat*0.05;
-        col=pow(max(col,vec3(0.0)),vec3(0.90));
-        // 수면 투명도 — fresnel: 정면은 맑게 비치고, 얕은 각도에서 반사
-        // 기본 alpha 매우 낮게 → 바닥/pia가 잘 보임
-        float alpha=mix(0.28, 0.72, fresnel*fresnel);
-        // sub 압력 때 살짝 더 불투명 (물이 흔들리는 느낌)
-        alpha+=uSub*0.06+uBeat*0.04;
-        alpha=clamp(alpha,0.18,0.80);
-        gl_FragColor=vec4(col,alpha);
+        // ── GPU 시뮬 노말 재구성 (reference: water.js normalShader)
+        // BA = normalize(cross(dy,dx)).xz — 직접 float 저장
+        vec4 sim = texture2D(tGPUWater, vUv);
+        vec2 nXZ = sim.ba;
+        // "make water look more peaked" (reference renderer.js)
+        vec2 coord = vUv;
+        for(int i=0;i<5;i++){
+          coord += sim.ba * 0.005;
+          sim = texture2D(tGPUWater, coord);
+        }
+        nXZ = sim.ba;
+        float ny = sqrt(max(0.001, 1.0 - nXZ.x*nXZ.x - nXZ.y*nXZ.y));
+        vec3 simNorm = normalize(vec3(nXZ.x, ny, nXZ.y));
+
+        // 미세 노말맵 레이어 (high-freq 잔결)
+        vec2 uv1 = vUv*2.2 + vec2(uTime*0.022, uTime*0.016);
+        vec2 uv2 = vUv*5.8 + vec2(-uTime*0.040, uTime*0.030);
+        vec3 dn1 = texture2D(tNormal,uv1).rgb*2.0-1.0;
+        vec3 dn2 = texture2D(tNormal,uv2).rgb*2.0-1.0;
+        vec3 detailN = normalize(dn1*0.55+dn2*0.45);
+        float detailBlend = 0.10 + uHigh*0.18 + uMouseSpeed*0.14;
+        vec3 normal = normalize(simNorm*(1.0-detailBlend) + detailN*detailBlend);
+
+        // ── Fresnel (Schlick) ──
+        vec3 viewDir = normalize(uCameraPos - vWorldPos);
+        float cosTheta = max(dot(normal, viewDir), 0.0);
+        float fresnel = 0.02 + 0.98*pow(1.0-cosTheta, 5.0);
+        fresnel = mix(0.06, 1.0, fresnel);
+
+        // ── 굴절: 수면 아래 풀 바닥 (pool bottom through refraction) ──
+        // normal XZ → UV 오프셋으로 굴절 근사
+        vec2 refractOfs = nXZ * 0.20 * clamp(uFluidStrength*0.6, 0.4, 2.0);
+        vec4 cSample = texture2D(tCaustics, vUv*0.5 + refractOfs*0.28 + 0.25);
+        // 바닥 기본색
+        vec3 poolBtm = mix(uWaterDeep, uWaterMid, 0.42);
+        // caustics 광점 (굴절광)
+        float cLight = cSample.r*(0.9 + uMid*0.6 + uBeat*0.5 + uMouseSpeed*0.35);
+        poolBtm += vec3(0.60,0.92,1.0)*cLight*0.42;
+        // 절차적 caustics (normal 기반)
+        float pc = noise(vUv*9.5+vec2(uTime*0.30))*noise(vUv*17.0-vec2(uTime*0.22));
+        pc = smoothstep(0.45,0.78,pc)*(0.14+uMid*0.18+uBeat*0.12+uMouseSpeed*0.10);
+        poolBtm += vec3(0.55,0.90,1.0)*pc;
+        // 깊이 감쇠
+        float depth = clamp(-vHeight*2.5+0.42, 0.0, 1.0);
+        poolBtm = mix(poolBtm, uWaterDeep, depth*0.65);
+        // 수면 통과 산란
+        float scatter = max(dot(normal, uSunDir),0.0);
+        vec3 wColor = mix(uWaterShallow, uWaterMid, depth);
+        wColor *= 0.55 + scatter*0.65;
+        poolBtm = mix(poolBtm, poolBtm*0.6+wColor*0.5, 0.35);
+
+        // ── 반사: 하늘 + 태양 글린트 ──
+        vec3 reflRay = reflect(-viewDir, normal);
+        float skyH = clamp(reflRay.y*0.5+0.5, 0.0, 1.0);
+        // 밤하늘 pool 분위기
+        vec3 skyRefl = mix(vec3(0.04,0.12,0.24), vec3(0.22,0.50,0.80), skyH*skyH);
+        // 태양 글린트 (sharp + halo)
+        float sunDot  = max(dot(reflRay, uSunDir), 0.0);
+        float sunSpec = pow(sunDot, 750.0);
+        float sunHalo = pow(sunDot, 22.0)*0.18;
+        float shimmer = uHigh*0.75 + uMouseSpeed*0.45 + uBeat*0.22;
+        sunSpec *= (2.8 + shimmer*2.2);
+        skyRefl += uSunColor*(sunSpec + sunHalo);
+        // 수면 sparkle (파고 반짝임)
+        float sparkle = noise(vUv*15.0+vec2(uTime*0.40));
+        sparkle = smoothstep(0.74,0.97,sparkle)*(uHigh*0.12+uBeat*0.08+uMouseSpeed*0.10);
+        skyRefl += vec3(0.88,0.97,1.0)*sparkle;
+
+        // ── 최종 합성 ──
+        vec3 palColor = vec3(uPaletteR,uPaletteG,uPaletteB);
+        poolBtm = mix(poolBtm, poolBtm*palColor*1.10, 0.07);
+        vec3 col = mix(poolBtm, skyRefl, fresnel);
+        // 파고(波高) 밝기
+        col += vec3(0.78,0.95,1.0)*max(0.0,vHeight)*0.20;
+        // beat 펄스
+        col += vec3(0.40,0.78,1.0)*uBeat*0.044;
+        // sub → 깊은 블루 가압
+        col = mix(col, col*vec3(0.92,0.96,1.04), uSub*0.08);
+        col = pow(max(col,vec3(0.0)),vec3(0.90));
+
+        // alpha: Fresnel → 정면 맑게, 경사 반사
+        float alpha = mix(0.24, 0.80, fresnel*fresnel);
+        alpha += uSub*0.06 + uBeat*0.04;
+        alpha = clamp(alpha, 0.17, 0.82);
+        gl_FragColor = vec4(col, alpha);
       }
     `,
     transparent: true,
@@ -3665,7 +3686,6 @@ function buildWaterSurface(){
   waterMesh.position.y = POOL_WATER_LEVEL;
   poolScene.add(waterMesh);
 
-  // 수면 아래 글로우
   poolUnderGlow = new THREE.Mesh(
     new THREE.PlaneGeometry(PW + 0.2, PD + 0.2),
     new THREE.MeshBasicMaterial({
@@ -4333,6 +4353,7 @@ function disposePoolRenderer({ preserveCanvas=true }={}){
   poolFluidTex=null;
   poolFluidCanvas=null;
   poolFluidCtx=null;
+poolFluidCtx=null;
 
   try{ poolCausticsTex?.dispose?.(); }catch(_){}
   poolCausticsTex=null;
@@ -4859,9 +4880,3 @@ function loop(){
 
   // Pool은 진입 시 즉시 뜨도록 한 번만 사전 초기화
   setTimeout(()=>{ initPoolRenderer(); }, 200);
-
-  window.addEventListener("pagehide", teardownApp, { once:true });
-  window.addEventListener("beforeunload", teardownApp, { once:true });
-
-  loop();
-})();
