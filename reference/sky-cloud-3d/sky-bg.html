@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    * { margin: 0; padding: 0; }
+    body { overflow: hidden; background: #07182e; }
+    canvas { display: block; }
+  </style>
+</head>
+<body>
+<script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
+<script>
+const SKY_VERT = `
+  varying vec3 vWorldPosition;
+  void main() {
+    vec4 wp = modelMatrix * vec4(position, 1.0);
+    vWorldPosition = wp.xyz;
+    gl_Position = projectionMatrix * viewMatrix * wp;
+  }
+`;
+
+const SKY_FRAG = `
+  precision highp float;
+  uniform float uTime;
+  uniform vec3  uSunDirection;
+  uniform sampler2D t_Perlin;
+  uniform float uCloudCoverage;
+  uniform float uCloudHeight;
+  uniform float uCloudThickness;
+  uniform float uCloudAbsorption;
+  uniform float uWindX;
+  uniform float uWindZ;
+  uniform float uMaxDist;
+  varying vec3 vWorldPosition;
+
+  #define STEPS       26
+  #define LIGHT_STEPS  6
+
+  // ── Physical sky (Preetham-inspired)
+  vec3 getSky(vec3 rd) {
+    float sunAmt  = max(0.0, dot(rd, uSunDirection));
+    float elev    = max(0.0, uSunDirection.y);
+    float skyPow  = pow(max(0.0, rd.y), 0.45);
+
+    vec3 zenith  = mix(vec3(0.08,0.22,0.65), vec3(0.18,0.42,0.82), elev);
+    vec3 horizon = mix(vec3(0.45,0.52,0.62), vec3(0.60,0.80,0.96), elev);
+    vec3 col     = mix(horizon, zenith, skyPow);
+
+    // Sun disc + corona
+    col += vec3(1.0,0.98,0.88) * smoothstep(0.9998, 0.9999, sunAmt) * 3.0;
+    col += vec3(1.0,0.90,0.65) * pow(sunAmt, 128.0) * 2.5;
+    col += vec3(1.0,0.76,0.44) * pow(sunAmt,  16.0) * 0.55;
+    col += vec3(0.9,0.65,0.35) * pow(sunAmt,   4.5) * 0.22;
+
+    // Horizon warm band
+    float hz = pow(clamp(1.0 - abs(rd.y) * 3.0, 0.0, 1.0), 4.0);
+    float sunSide = max(0.0, dot(normalize(vec3(rd.x,0.0,rd.z)),
+                                  normalize(vec3(uSunDirection.x,0.0,uSunDirection.z))));
+    col += vec3(0.9,0.65,0.40) * hz * sunSide * 0.28 * elev;
+
+    return col;
+  }
+
+  // ── Noise
+  float n3D(vec3 p) {
+    return texture2D(t_Perlin, p.xz * 0.01).r;
+  }
+  const mat3 M = mat3( 0.00, 0.80, 0.60,
+                       -0.80, 0.36,-0.48,
+                       -0.60,-0.48, 0.64) * 1.21;
+  float fbm(vec3 p) {
+    float v = 0.517 * n3D(p); p = M * p * 2.764;
+    v += 0.256 * n3D(p);      p = M * p * 2.764;
+    v += 0.125 * n3D(p);      p = M * p * 2.764;
+    v += 0.063 * n3D(p);
+    return v;
+  }
+
+  // ── Cloud density
+  float cloudDensity(vec3 pos, vec3 offset) {
+    float d    = fbm(pos * 0.0212 + offset);
+    float cov  = 1.0 - uCloudCoverage;
+    d = smoothstep(cov - 0.02, cov + 0.10, d);
+    float h    = clamp((pos.y - uCloudHeight) / uCloudThickness, 0.0, 1.0);
+    float fade = smoothstep(0.0, 0.18, h) * (1.0 - smoothstep(0.55, 1.0, h));
+    return clamp(d * fade * fade, 0.0, 1.0);
+  }
+
+  float cloudLight(vec3 pos, vec3 lStep, vec3 offset) {
+    float T = 1.0;
+    for (int i = 0; i < LIGHT_STEPS; i++) {
+      T *= exp(-uCloudAbsorption * cloudDensity(pos, offset));
+      pos += lStep;
+    }
+    return T;
+  }
+
+  vec4 renderClouds(vec3 ro, vec3 rd) {
+    if (rd.y <= 0.001) return vec4(0.0);
+    float tBase  = (uCloudHeight - ro.y) / rd.y;
+    float tTop   = (uCloudHeight + uCloudThickness - ro.y) / rd.y;
+    float tEnter = max(min(tBase, tTop), 0.0);
+    float tExit  = min(max(tBase, tTop), uMaxDist);
+    if (tExit <= tEnter) return vec4(0.0);
+
+    float fade  = 1.0 - smoothstep(uMaxDist * 0.55, uMaxDist, tEnter);
+    float dist  = tExit - tEnter;
+    float step  = dist / float(STEPS);
+    vec3  dStep = rd * step;
+    vec3  lStep = uSunDirection * 7.0;
+    vec3  wind  = vec3(-uTime * uWindX, 0.0, -uTime * uWindZ);
+    vec3  pos   = ro + rd * tEnter;
+
+    float T = 1.0, alpha = 0.0;
+    vec3  C = vec3(0.0);
+    float elev = max(0.0, uSunDirection.y);
+
+    for (int i = 0; i < STEPS; i++) {
+      float d = cloudDensity(pos, wind);
+      if (d > 0.01) {
+        float Ti  = exp(-uCloudAbsorption * d * step);
+        float lit = cloudLight(pos, lStep, wind);
+        float h   = clamp((pos.y - uCloudHeight) / uCloudThickness, 0.0, 1.0);
+        float lf  = exp(h * 1.2) / 1.9;
+        float sc  = pow(max(0.0, dot(rd, uSunDirection)), 3.0);
+
+        vec3 sunColor  = mix(vec3(1.0,0.96,0.88), vec3(1.0,0.72,0.38), 1.0-elev);
+        vec3 edgeColor = mix(vec3(0.92,0.95,1.00), sunColor, sc * 0.55);
+        vec3 baseColor = mix(vec3(0.28,0.30,0.36), vec3(0.82,0.87,0.94), elev);
+        vec3 col       = mix(baseColor, edgeColor, clamp(lit * lf + sc * 0.12, 0.0, 1.0));
+
+        T     *= Ti;
+        C     += T * col * d * step * 1.6;
+        alpha += (1.0 - Ti) * (1.0 - alpha);
+      }
+      pos += dStep;
+      if (T < 0.01) break;
+    }
+
+    vec3 tint = mix(vec3(0.72,0.78,0.84),
+                    mix(vec3(0.90,0.70,0.48), vec3(0.95,0.88,0.75), elev),
+                    0.45 * pow(max(0.0, dot(rd, uSunDirection)), 2.0));
+    return vec4(C * tint * fade, alpha * fade);
+  }
+
+  void main() {
+    vec3 rd    = normalize(vWorldPosition - cameraPosition);
+    vec3 sky   = getSky(rd);
+    vec4 cloud = renderClouds(cameraPosition, rd);
+
+    vec3 color = sky * (1.0 - cloud.a) + cloud.rgb;
+
+    // Horizon mist
+    float hz   = pow(1.0 - max(0.0, rd.y), 5.5);
+    color      = mix(color, vec3(0.58,0.68,0.78), 0.42 * hz);
+
+    // Reinhard + gamma
+    color = color / (color + vec3(1.0));
+    color = pow(max(color, vec3(0.0)), vec3(1.0 / 2.2));
+
+    gl_FragColor = vec4(color, 1.0);
+  }
+`;
+
+// ── Procedural Perlin noise texture
+function makePerlinTex() {
+  const S = 256;
+  const data = new Uint8Array(S * S * 4);
+  function h(x, y) { let n = Math.sin(x*127.1+y*311.7)*43758.5453; return n-Math.floor(n); }
+  function fade(t) { return t*t*t*(t*(t*6-15)+10); }
+  function lerp(a,b,t){ return a+(b-a)*t; }
+  function noise(x,y) {
+    const ix=Math.floor(x), iy=Math.floor(y), fx=x-ix, fy=y-iy;
+    return lerp(lerp(h(ix,iy),h(ix+1,iy),fade(fx)), lerp(h(ix,iy+1),h(ix+1,iy+1),fade(fx)), fade(fy));
+  }
+  for (let y=0;y<S;y++) for (let x=0;x<S;x++) {
+    let v=0, a=0.5, tot=0, f=4;
+    for (let o=0;o<6;o++){ v+=a*noise(x/S*f,y/S*f); tot+=a; a*=0.5; f*=2; }
+    v = Math.max(0, Math.min(1, (v/tot-0.18)/0.70));
+    const b = Math.round(v*255);
+    const i = (y*S+x)*4;
+    data[i]=data[i+1]=data[i+2]=b; data[i+3]=255;
+  }
+  const tex = new THREE.DataTexture(data, S, S, THREE.RGBAFormat);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.minFilter = tex.magFilter = THREE.LinearFilter;
+  tex.generateMipmaps = false;
+  tex.flipY = false;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+// ── Scene setup
+const scene    = new THREE.Scene();
+const clock    = new THREE.Clock();
+const camera   = new THREE.PerspectiveCamera(72, innerWidth/innerHeight, 0.1, 30000);
+camera.position.set(0, 120, 0);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.toneMapping     = THREE.NoToneMapping;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+document.body.appendChild(renderer.domElement);
+
+const uniforms = {
+  uTime:            { value: 0 },
+  uSunDirection:    { value: new THREE.Vector3(0.6, 0.55, -0.55).normalize() },
+  t_Perlin:         { value: makePerlinTex() },
+  uCloudCoverage:   { value: 0.60 },
+  uCloudHeight:     { value: 600 },
+  uCloudThickness:  { value: 52 },
+  uCloudAbsorption: { value: 1.03 },
+  uWindX:           { value: 4.0 },
+  uWindZ:           { value: 2.0 },
+  uMaxDist:         { value: 9000 },
+};
+
+const skyDome = new THREE.Mesh(
+  new THREE.SphereGeometry(20000, 48, 24),
+  new THREE.ShaderMaterial({
+    vertexShader: SKY_VERT, fragmentShader: SKY_FRAG,
+    uniforms, side: THREE.BackSide,
+  })
+);
+skyDome.renderOrder   = -1000;
+skyDome.frustumCulled = false;
+scene.add(skyDome);
+
+// ── Mouse / message parallax
+let tx = 0, ty = 0, mx = 0, my = 0;
+window.addEventListener('mousemove', e => {
+  tx = (e.clientX / innerWidth  - 0.5) * 2;
+  ty = (e.clientY / innerHeight - 0.5) * 2;
+}, { passive: true });
+window.addEventListener('message', e => {
+  if (e.data && typeof e.data.mx === 'number') { tx = e.data.mx * 2; ty = e.data.my * 2; }
+});
+
+// ── Pause / resume
+let active = true;
+window.addEventListener('message', e => {
+  if (e.data === 'pause')  active = false;
+  if (e.data === 'resume') active = true;
+});
+
+window.addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+// ── Animation
+let sunAngle = Math.PI * 0.30;
+(function loop() {
+  requestAnimationFrame(loop);
+  if (!active) return;
+
+  const t = clock.getElapsedTime();
+  mx += (tx - mx) * 0.05;
+  my += (ty - my) * 0.05;
+
+  // Sun: slow float in daytime arc
+  sunAngle = Math.PI * 0.20 + Math.sin(t * 0.007) * Math.PI * 0.18;
+  uniforms.uSunDirection.value.set(
+    Math.cos(sunAngle) * 0.8,
+    Math.sin(sunAngle) * 0.65 + 0.28,
+    -0.55
+  ).normalize();
+  uniforms.uTime.value = t;
+
+  // Camera tilt follows mouse
+  const lx = -mx * 100;
+  const ly =  120 - my * 40;
+  const lz = -300;
+  camera.position.set(0, 120, 0);
+  camera.lookAt(lx, ly, lz);
+  skyDome.position.copy(camera.position);
+
+  renderer.render(scene, camera);
+})();
+</script>
+</body>
+</html>

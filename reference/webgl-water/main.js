@@ -24,11 +24,11 @@ function handleError(text) {
 
 window.onerror = handleError;
 
-var gl = GL.create();
+var gl = GL.create({alpha: true});
 var water;
 var cubemap;
 var renderer;
-var angleX = -25;
+var angleX = -28;
 var angleY = -200.5;
 
 // Sphere physics info
@@ -45,7 +45,7 @@ window.onload = function() {
   var help = document.getElementById('help');
 
   function onresize() {
-    var width = innerWidth - help.clientWidth - 20;
+    var width = innerWidth;
     var height = innerHeight;
     gl.canvas.width = width * ratio;
     gl.canvas.height = height * ratio;
@@ -60,7 +60,7 @@ window.onload = function() {
   }
 
   document.body.appendChild(gl.canvas);
-  gl.clearColor(0, 0, 0, 1);
+  gl.clearColor(0, 0, 0, 0);
 
   water = new Water();
   renderer = new Renderer();
@@ -178,41 +178,76 @@ window.onload = function() {
     mode = -1;
   }
 
-  function isHelpElement(element) {
-    return element === help || element.parentNode && isHelpElement(element.parentNode);
+  // ── Hover-to-ripple (no click required) ──────────────────────────────────
+  var _mouseNear = false;
+  var _lastDrop  = 0;
+
+  function _tryHoverDrop(px, py) {
+    try {
+      var tracer = new GL.Raytracer();
+      var ray = tracer.getRayForPixel(px * ratio, py * ratio);
+      if (tracer.eye.y > 0 && ray.y < 0) {
+        var hit = tracer.eye.add(ray.multiply(-tracer.eye.y / ray.y));
+        _mouseNear = Math.abs(hit.x) < 1.4 && Math.abs(hit.z) < 1.4;
+        var now = performance.now();
+        if (Math.abs(hit.x) < 1 && Math.abs(hit.z) < 1 && now - _lastDrop > 55) {
+          water.addDrop(hit.x, hit.z, 0.028, 0.010);
+          _lastDrop = now;
+        }
+      } else {
+        _mouseNear = false;
+      }
+    } catch (err) {
+      _mouseNear = false;
+    }
   }
 
+  // 클릭 → 카메라 회전 or 구체 이동 (물 위는 호버가 처리하므로 항상 orbit)
   document.onmousedown = function(e) {
-    if (!isHelpElement(e.target)) {
-      e.preventDefault();
-      startDrag(e.pageX, e.pageY);
-    }
+    e.preventDefault();
+    oldX = e.pageX; oldY = e.pageY;
+    try {
+      var tracer = new GL.Raytracer();
+      var ray    = tracer.getRayForPixel(e.pageX * ratio, e.pageY * ratio);
+      var sph    = GL.Raytracer.hitTestSphere(tracer.eye, ray, center, radius);
+      if (sph) {
+        mode = MODE_MOVE_SPHERE;
+        prevHit     = sph.hit;
+        planeNormal = tracer.getRayForPixel(gl.canvas.width / 2, gl.canvas.height / 2).negative();
+      } else {
+        mode = MODE_ORBIT_CAMERA;
+      }
+    } catch (err) { mode = MODE_ORBIT_CAMERA; }
   };
 
   document.onmousemove = function(e) {
-    duringDrag(e.pageX, e.pageY);
-  };
-
-  document.onmouseup = function() {
-    stopDrag();
-  };
-
-  document.ontouchstart = function(e) {
-    if (e.touches.length === 1 && !isHelpElement(e.target)) {
-      e.preventDefault();
-      startDrag(e.touches[0].pageX, e.touches[0].pageY);
+    if (mode === MODE_ORBIT_CAMERA) {
+      angleY -= e.pageX - oldX;
+      angleX -= e.pageY - oldY;
+      angleX = Math.max(-89.999, Math.min(89.999, angleX));
+      oldX = e.pageX; oldY = e.pageY;
+      if (paused) draw();
+    } else if (mode === MODE_MOVE_SPHERE) {
+      duringDrag(e.pageX, e.pageY);
+    } else {
+      // 드래그 없음 → 호버 물결
+      _tryHoverDrop(e.pageX, e.pageY);
     }
   };
 
+  document.onmouseup    = function()  { mode = -1; };
+  document.onmouseleave = function()  { mode = -1; _mouseNear = false; };
+
+  // 터치: 한 손가락 이동 → 물결
+  document.ontouchstart = function(e) {
+    if (e.touches.length === 1) {
+      e.preventDefault();
+      _tryHoverDrop(e.touches[0].pageX, e.touches[0].pageY);
+    }
+  };
   document.ontouchmove = function(e) {
     if (e.touches.length === 1) {
-      duringDrag(e.touches[0].pageX, e.touches[0].pageY);
-    }
-  };
-
-  document.ontouchend = function(e) {
-    if (e.touches.length == 0) {
-      stopDrag();
+      _tryHoverDrop(e.touches[0].pageX, e.touches[0].pageY);
     }
   };
 
@@ -252,6 +287,11 @@ window.onload = function() {
     // Update the water simulation and graphics
     water.stepSimulation();
     water.stepSimulation();
+    // 마우스가 멀리 있을 때 추가 감쇠 — 빠르게 잔잠
+    if (!_mouseNear) {
+      water.stepSimulation();
+      water.stepSimulation();
+    }
     water.updateNormals();
     renderer.updateCaustics(water);
   }
@@ -265,10 +305,10 @@ window.onload = function() {
 
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     gl.loadIdentity();
-    gl.translate(0, 0, -4);
+    gl.translate(0, 0, -4.2);
     gl.rotate(-angleX, 1, 0, 0);
     gl.rotate(-angleY, 0, 1, 0);
-    gl.translate(0, 0.5, 0);
+    gl.translate(0, 0.4, 0);
 
     gl.enable(gl.DEPTH_TEST);
     renderer.sphereCenter = center;
