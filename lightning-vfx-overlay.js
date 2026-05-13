@@ -316,15 +316,9 @@ class LightningVFXOverlay {
 
   // ── Event handlers ────────────────────────────────────────────────────────
 
-  _isNightHour() {
-    const h = new Date().getHours();
-    return h >= 0 && h < 3;
-  }
-
   _onDown(e) {
-    if (!this._isNightHour()) return;
     if (isBlockedTarget(e.target)) return;
-    if (document.body.dataset.hIdx === '1') return;
+    if (Math.random() > 0.10) return;   // ~10% 확률 (10분의 1)
     const { x, y } = this._s2w(e.clientX, e.clientY);
     this._spawnAt(x, y, performance.now() / 1000);
   }

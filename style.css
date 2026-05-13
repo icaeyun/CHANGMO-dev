@@ -781,11 +781,39 @@ html, body {
 
 /* ══════════════════════════════════════════════
 /* ══════════════════════════════════════════════
-   PANEL POOL — cinematic deep pool blue
+   PANEL POOL — transparent sky + water
 ══════════════════════════════════════════════ */
 .panel-pool {
-  background: #020508;
+  background: #0c2a4e;
   overflow: hidden;
+}
+
+.pool-sky-frame {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 1;
+  border: 0;
+  display: block;
+  pointer-events: none;
+}
+
+.pool-reference-frame {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 10;
+  border: 0;
+  display: block;
+  background: transparent;
+}
+
+.panel-pool #pool-canvas,
+.panel-pool #pool-rain-canvas {
+  display: none !important;
 }
 
 #pool-canvas,
@@ -996,65 +1024,11 @@ html, body {
 }
 
 .panel-pool .back-hint.pool-back {
-  z-index: 9;
-  pointer-events: auto;
-  opacity: 0.75;
-}
-.panel-pool .back-hint.pool-back:hover {
-  opacity: 1;
-  transform: scale(1.05);
-}
-.panel-pool .back-hint.pool-back .back-arrow {
-  font-size: 1.15rem;
-  color: #fff;
-  text-shadow:
-    0 0 8px  rgba(255,255,255,0.95),
-    0 0 18px rgba(120,200,255,0.85),
-    0 0 36px rgba(80,160,255,0.55),
-    0 0 60px rgba(60,120,255,0.30);
-  animation: poolBackPulse 2.8s ease-in-out infinite;
-}
-.panel-pool .back-hint.pool-back .back-text {
-  font-family: "Cormorant Garamond", serif;
-  font-size: 0.72rem;
-  letter-spacing: 0.28em;
-  color: #fff;
-  text-shadow:
-    0 0 6px  rgba(255,255,255,0.80),
-    0 0 14px rgba(120,200,255,0.70),
-    0 0 28px rgba(80,160,255,0.40);
-  animation: poolBackPulse 2.8s ease-in-out infinite;
-  animation-delay: 0.25s;
-}
-
-@keyframes poolBackPulse {
-  0%, 100% {
-    text-shadow:
-      0 0 6px  rgba(255,255,255,0.75),
-      0 0 14px rgba(120,200,255,0.60),
-      0 0 28px rgba(80,160,255,0.35);
-  }
-  50% {
-    text-shadow:
-      0 0 10px rgba(255,255,255,1.00),
-      0 0 22px rgba(140,220,255,0.95),
-      0 0 44px rgba(80,160,255,0.60),
-      0 0 70px rgba(60,120,255,0.28);
-  }
-}
-
-.panel-pool .back-hint.pool-back:hover .back-arrow,
-.panel-pool .back-hint.pool-back:hover .back-text {
-  animation: none;
-  text-shadow:
-    0 0 10px rgba(255,255,255,1.00),
-    0 0 22px rgba(160,230,255,1.00),
-    0 0 44px rgba(80,160,255,0.70),
-    0 0 70px rgba(60,120,255,0.38);
+  display: none;
 }
 
 .pool-back {
-  z-index: 9;
+  display: none;
 }
 
 @media (max-width: 980px) {

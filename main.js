@@ -971,6 +971,7 @@ function goTo(hIdx,vIdx){
   LS.hIdx=hIdx; LS.vIdx=vIdx;
   LS.hOff=hIdx*window.innerWidth; LS.vOff=vIdx*window.innerHeight;
   document.body.dataset.hIdx = hIdx;
+  document.body.classList.toggle("pool-reference-active", hIdx===3);
   animateLayout(); updateActiveGLB(vIdx);
 
   const hint=document.getElementById("scroll-hint");
@@ -983,8 +984,13 @@ function goTo(hIdx,vIdx){
     else sh.classList.remove("visible");
   }
   if(hIdx===2){ startSceneRenderer(); initAlbumPanel(); }
-  poolActive = (hIdx===3);
-  if(hIdx===3){ startPoolRenderer(); }
+  poolActive = false;
+  if(hIdx===3){
+    disposePoolRenderer({ preserveCanvas:true });
+    startPoolSkyCanvas();
+  } else {
+    stopPoolSkyCanvas();
+  }
 
   // 브랜드 색상 — 피아노 패널(hIdx 1)일 때 빨간색
   const brand = document.querySelector(".brand");
@@ -2620,6 +2626,7 @@ function bindAudioEvents(){
       }
       setupPoolRainCanvas();
     }
+    _pSkyResize();
     LS.hOff=LS.hIdx*window.innerWidth; LS.vOff=LS.vIdx*window.innerHeight;
     LS.cHoff=LS.hOff; LS.cVoff=LS.vOff;
     mc.style.transform=`translate(${-LS.cHoff}px,${-LS.cVoff}px)`;
@@ -2697,6 +2704,7 @@ let poolUnderGlow=null;
 let poolDropPass=null;
 let poolCausticsCanvas=null, poolCausticsCtx=null, poolCausticsTex=null;
 let poolWaterNormals=null;
+let poolSkyCube=null;
 
 const poolMouseRipples=[];
 let poolMouseX=0.5, poolMouseY=0.5;
@@ -3679,6 +3687,216 @@ function buildWaterSurface(){
 }
 
 // ── pia.glb 로드
+function buildWaterSurfaceEvan(){
+  const PW = POOL_DIMENSIONS.width;
+  const PD = POOL_DIMENSIONS.length;
+  const PH = POOL_DIMENSIONS.depth;
+  const floorY = -PH + POOL_WATER_LEVEL;
+  initFluidSim();
+
+  const waterGeom = new THREE.PlaneGeometry(PW, PD, 160, 220);
+
+  const fallbackNormals = makeProceduralWaterNormals(1024);
+  poolWaterNormals = fallbackNormals;
+  new THREE.TextureLoader().load(
+    "assets/waternormals.jpg",
+    (tex)=>{
+      tex.wrapS=tex.wrapT=THREE.RepeatWrapping;
+      tex.repeat.set(2.0,2.0);
+      poolWaterNormals=tex;
+      if(waterMesh?.material?.uniforms?.tNormal) waterMesh.material.uniforms.tNormal.value=tex;
+    },
+    undefined,
+    ()=>{}
+  );
+
+  if(!poolSkyCube){
+    poolSkyCube = new THREE.CubeTextureLoader()
+      .setPath("reference/webgl-water/")
+      .load(["xpos.jpg","xneg.jpg","ypos.jpg","ypos.jpg","zpos.jpg","zneg.jpg"]);
+    poolSkyCube.colorSpace = THREE.SRGBColorSpace;
+  }
+
+  const waterMat = new THREE.ShaderMaterial({
+    uniforms:{
+      tNormal:{ value:poolWaterNormals },
+      tFluid:{ value:poolFluidTex },
+      tSky:{ value:poolSkyCube },
+      uTime:{ value:0 },
+      uSunDir:{ value:new THREE.Vector3(0.42,0.95,0.28).normalize() },
+      uSunColor:{ value:new THREE.Color(0xfff4df) },
+      uCameraPos:{ value:new THREE.Vector3() },
+      uFluidStrength:{ value:0.0 },
+      uHalfSize:{ value:new THREE.Vector2(PW*0.5,PD*0.5) },
+      uBoxMin:{ value:new THREE.Vector3(-PW*0.5,floorY,-PD*0.5) },
+      uBoxMax:{ value:new THREE.Vector3(PW*0.5,POOL_WATER_LEVEL+PH*0.12,PD*0.5) },
+      uFloorY:{ value:floorY },
+      uSub:{ value:0 },
+      uMid:{ value:0 },
+      uHigh:{ value:0 },
+      uBeat:{ value:0 },
+      uMouseSpeed:{ value:0 },
+      uPaletteR:{ value:0.5 },
+      uPaletteG:{ value:0.7 },
+      uPaletteB:{ value:1.0 },
+      uWaterDeep:{ value:new THREE.Color(0x0a3d5c) },
+      uWaterMid:{ value:new THREE.Color(0x1a88cc) },
+      uWaterShallow:{ value:new THREE.Color(0x5ec8f0) },
+    },
+    vertexShader:`
+      uniform sampler2D tFluid;
+      uniform float uTime,uSub,uBeat,uFluidStrength;
+      varying vec3 vWorldPos;
+      varying vec2 vUv;
+      varying vec3 vNormal;
+      void main(){
+        vUv=uv;
+        vec4 fld=texture2D(tFluid,uv);
+        float h=(fld.r-0.5)*0.42*uFluidStrength;
+        float swell=sin(position.x*0.18+uTime*0.5)*0.018*uSub
+          + cos(position.y*0.14+uTime*0.4)*0.014*uSub;
+        float beatBump=sin(length(position.xy)*0.55-uTime*5.5)*0.018*uBeat;
+        float edgeFadeX=smoothstep(0.0,0.055,uv.x)*smoothstep(1.0,0.945,uv.x);
+        float edgeFadeY=smoothstep(0.0,0.055,uv.y)*smoothstep(1.0,0.945,uv.y);
+        float edgeMask=edgeFadeX*edgeFadeY;
+        float disp=(h+swell+beatBump)*edgeMask;
+        vec3 pos=position+vec3(0.0,0.0,disp);
+        vWorldPos=(modelMatrix*vec4(pos,1.0)).xyz;
+        vec2 gxy=fld.gb*2.0-1.0;
+        vNormal=normalize(normalMatrix*vec3(-gxy.x*uFluidStrength*edgeMask*0.72,-gxy.y*uFluidStrength*edgeMask*0.72,1.0));
+        gl_Position=projectionMatrix*modelViewMatrix*vec4(pos,1.0);
+      }
+    `,
+    fragmentShader:`
+      precision highp float;
+      uniform sampler2D tNormal,tFluid;
+      uniform samplerCube tSky;
+      uniform float uTime,uHigh,uBeat,uMouseSpeed,uFluidStrength,uFloorY;
+      uniform float uPaletteR,uPaletteG,uPaletteB;
+      uniform vec3 uSunDir,uSunColor,uCameraPos,uBoxMin,uBoxMax;
+      uniform vec2 uHalfSize;
+      varying vec3 vWorldPos,vNormal;
+      varying vec2 vUv;
+
+      float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+      float noise(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.0-2.0*f);return mix(mix(hash(i),hash(i+vec2(1,0)),f.x),mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),f.x),f.y);}
+
+      vec2 intersectCube(vec3 origin, vec3 ray, vec3 cubeMin, vec3 cubeMax){
+        vec3 tMin=(cubeMin-origin)/ray;
+        vec3 tMax=(cubeMax-origin)/ray;
+        vec3 t1=min(tMin,tMax);
+        vec3 t2=max(tMin,tMax);
+        float tNear=max(max(t1.x,t1.y),t1.z);
+        float tFar=min(min(t2.x,t2.y),t2.z);
+        return vec2(tNear,tFar);
+      }
+
+      vec3 tilePoolColor(vec3 point){
+        vec2 tileUv;
+        vec3 base;
+        float shade=1.0;
+        if(abs(point.y-uFloorY)<0.08){
+          tileUv=point.xz*0.52;
+          base=vec3(0.56,0.82,0.92);
+          shade=0.52/max(0.66,length((point.xz/uHalfSize)*vec2(1.0,0.82)));
+        }else if(abs(point.x)>uHalfSize.x-0.08){
+          tileUv=point.zy*0.58;
+          base=vec3(0.48,0.78,0.90);
+          shade=0.62;
+        }else{
+          tileUv=point.xy*0.58;
+          base=vec3(0.48,0.78,0.90);
+          shade=0.62;
+        }
+        vec2 cell=abs(fract(tileUv)-0.5);
+        float grout=1.0-smoothstep(0.455,0.49,max(cell.x,cell.y));
+        vec3 color=mix(base*0.44,base,grout)*shade;
+        vec3 refractedLight=refract(-normalize(uSunDir),vec3(0.0,1.0,0.0),1.0/1.333);
+        vec2 caUv=0.75*(point.xz-point.y*refractedLight.xz/max(abs(refractedLight.y),0.08))*0.18;
+        float ca=noise(caUv*7.0+uTime*0.18)*noise(caUv*13.0-uTime*0.13);
+        ca=smoothstep(0.43,0.88,ca);
+        color+=vec3(0.85,1.0,0.92)*ca*(0.48+uHigh*0.55+uBeat*0.20);
+        return color;
+      }
+
+      vec3 getSurfaceRayColor(vec3 origin, vec3 ray, vec3 waterColor){
+        if(ray.y<0.0){
+          vec2 t=intersectCube(origin,ray,uBoxMin,uBoxMax);
+          vec3 hit=origin+ray*max(t.y,0.0);
+          return tilePoolColor(hit)*waterColor;
+        }
+        vec2 t=intersectCube(origin,ray,uBoxMin,uBoxMax);
+        vec3 hit=origin+ray*t.y;
+        if(t.y>0.0&&hit.y<uBoxMax.y-0.02) return tilePoolColor(hit)*waterColor;
+        vec3 sky=textureCube(tSky,ray).rgb;
+        float sun=pow(max(0.0,dot(normalize(uSunDir),ray)),2600.0);
+        return sky+vec3(10.0,8.0,6.0)*sun;
+      }
+
+      void main(){
+        vec2 uv1=vUv*1.8+vec2(uTime*0.022,uTime*0.016);
+        vec2 uv2=vUv*4.5+vec2(-uTime*0.038,uTime*0.028);
+        vec3 n1=texture2D(tNormal,uv1).rgb*2.0-1.0;
+        vec3 n2=texture2D(tNormal,uv2).rgb*2.0-1.0;
+        vec2 fine=(n1.xy*0.62+n2.xy*0.38)*(0.06+uHigh*0.025+uMouseSpeed*0.025);
+        vec3 nMap=normalize(vNormal+vec3(fine.x,0.0,fine.y));
+
+        vec2 coord=vUv;
+        vec4 info=texture2D(tFluid,coord);
+        for(int i=0;i<5;i++){
+          coord+=(info.gb*2.0-1.0)*0.0045*uFluidStrength;
+          info=texture2D(tFluid,coord);
+        }
+        vec2 peaked=info.gb*2.0-1.0;
+        nMap=normalize(nMap+vec3(-peaked.x,0.0,-peaked.y)*(0.09+uFluidStrength*0.025));
+
+        vec3 incomingRay=normalize(vWorldPos-uCameraPos);
+        vec3 reflectedRay=reflect(incomingRay,nMap);
+        vec3 refractedRay=refract(incomingRay,nMap,1.0/1.333);
+        float fresnel=mix(0.25,1.0,pow(1.0-max(dot(nMap,-incomingRay),0.0),3.0));
+
+        vec3 waterColor=vec3(0.25,1.0,1.25);
+        vec3 palColor=vec3(uPaletteR,uPaletteG,uPaletteB);
+        waterColor=mix(waterColor,waterColor*palColor*1.12,0.035);
+
+        vec3 reflectedColor=getSurfaceRayColor(vWorldPos,reflectedRay,waterColor);
+        vec3 refractedColor=getSurfaceRayColor(vWorldPos,refractedRay,waterColor);
+        vec3 col=mix(refractedColor,reflectedColor,fresnel);
+        vec3 halfV=normalize(uSunDir-incomingRay);
+        float spec=pow(max(dot(nMap,halfV),0.0),520.0);
+        float shimmer=uHigh*0.65+uMouseSpeed*0.35;
+        col+=uSunColor*spec*(2.0+shimmer*1.8+uBeat*0.65);
+        col*=vec3(0.78,1.0,1.08);
+        col=pow(max(col,vec3(0.0)),vec3(0.88));
+        float alpha=clamp(0.78+fresnel*0.22+uBeat*0.04,0.72,0.98);
+        gl_FragColor=vec4(col,alpha);
+      }
+    `,
+    transparent:true,
+    depthWrite:false,
+    side:THREE.DoubleSide,
+  });
+
+  waterMesh=new THREE.Mesh(waterGeom,waterMat);
+  waterMesh.rotation.x=-Math.PI*0.5;
+  waterMesh.position.y=POOL_WATER_LEVEL;
+  poolScene.add(waterMesh);
+
+  poolUnderGlow=new THREE.Mesh(
+    new THREE.PlaneGeometry(PW+0.2,PD+0.2),
+    new THREE.MeshBasicMaterial({
+      color:0x8fe8ff,
+      transparent:true,
+      opacity:0.028,
+      blending:THREE.AdditiveBlending,
+      depthWrite:false
+    })
+  );
+  poolUnderGlow.rotation.x=-Math.PI*0.5;
+  poolUnderGlow.position.y=POOL_WATER_LEVEL-0.04;
+  poolScene.add(poolUnderGlow);
+}
+
 function loadPiaModel(){
   const loader=new GLTFLoader();
   loader.load("assets/pia.glb",(gltf)=>{
@@ -4341,6 +4559,8 @@ function disposePoolRenderer({ preserveCanvas=true }={}){
 
   try{ poolWaterNormals?.dispose?.(); }catch(_){}
   poolWaterNormals=null;
+  try{ poolSkyCube?.dispose?.(); }catch(_){}
+  poolSkyCube=null;
 
   if(poolRenderer){
     try{ poolRenderer.renderLists.dispose(); }catch(_){}
@@ -4461,7 +4681,7 @@ function initPoolRenderer(){
   buildPoolSky();
   buildProceduralCaustics();
   buildPoolShell();
-  buildWaterSurface();
+  buildWaterSurfaceEvan();
   loadPiaModel();
   initPoolComposer();
   setupPoolRainCanvas();
@@ -4472,6 +4692,68 @@ function initPoolRenderer(){
 
   poolInited=true;
 }
+
+// ════════════════════════════════════════════════════════
+// POOL SKY FRAME — Three.js volumetric sky iframe
+// ════════════════════════════════════════════════════════
+let _pSkyFrame = null;
+let _pSkyMxS = 0, _pSkyMyS = 0;
+
+function _pSkyGetFrame(){
+  if(!_pSkyFrame) _pSkyFrame = document.getElementById('pool-sky-frame');
+  return _pSkyFrame;
+}
+
+function startPoolSkyCanvas(){
+  const fr = _pSkyGetFrame();
+  if(fr){ fr.style.visibility='visible'; _pSkyPostMsg('resume'); }
+  // relay mouse from parent and water-iframe → sky iframe
+  _pSkyAttachMouse();
+}
+
+function stopPoolSkyCanvas(){
+  const fr = _pSkyGetFrame();
+  if(fr){ _pSkyPostMsg('pause'); }
+}
+
+function _pSkyPostMsg(msg){
+  try{
+    const fr = _pSkyGetFrame();
+    if(fr && fr.contentWindow) fr.contentWindow.postMessage(msg,'*');
+  }catch(e){}
+}
+
+function _pSkyAttachMouse(){
+  // parent window mouse
+  window.addEventListener('mousemove', _pSkyRelayMouse, {passive:true});
+  // water iframe mouse (same origin)
+  const waterFr = document.querySelector('.pool-reference-frame');
+  if(waterFr){
+    function attach(){
+      try{
+        waterFr.contentWindow.addEventListener('mousemove', e=>{
+          const r = waterFr.getBoundingClientRect();
+          _pSkyRelayMouse2((r.left+e.clientX)/window.innerWidth-0.5,
+                           (r.top +e.clientY)/window.innerHeight-0.5);
+        },{passive:true});
+      }catch(e){}
+    }
+    if(waterFr.contentDocument && waterFr.contentDocument.readyState==='complete') attach();
+    else waterFr.addEventListener('load', attach);
+  }
+}
+
+function _pSkyRelayMouse(e){
+  _pSkyRelayMouse2(e.clientX/window.innerWidth-0.5, e.clientY/window.innerHeight-0.5);
+}
+function _pSkyRelayMouse2(mx, my){
+  try{
+    const fr = _pSkyGetFrame();
+    if(fr && fr.contentWindow) fr.contentWindow.postMessage({mx, my},'*');
+  }catch(e){}
+}
+
+function _pSkyResize(){}
 
 function startPoolRenderer(){
   if(!poolInited) initPoolRenderer();
@@ -4858,7 +5140,7 @@ function loop(){
   primeGLBPreloadQueue();
 
   // Pool은 진입 시 즉시 뜨도록 한 번만 사전 초기화
-  setTimeout(()=>{ initPoolRenderer(); }, 200);
+  // The POOL panel now embeds the original madebyevan.com/webgl-water demo verbatim.
 
   window.addEventListener("pagehide", teardownApp, { once:true });
   window.addEventListener("beforeunload", teardownApp, { once:true });
